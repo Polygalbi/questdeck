@@ -138,6 +138,10 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("All projects");
   const [createOpen, setCreateOpen] = useState(false);
+  const [createStatus, setCreateStatus] = useState<Status>("Ready");
+  const [activeColumnMenu, setActiveColumnMenu] = useState<Status | null>(null);
+  const [editColumn, setEditColumn] = useState<Status | null>(null);
+  const [columnNames, setColumnNames] = useState<Partial<Record<Status, string>>>({});
   const [selected, setSelected] = useState<Card | null>(null);
   const [toast, setToast] = useState("");
   const [account, setAccount] = useState<Account | null>(null);
@@ -226,6 +230,13 @@ export default function Home() {
   }, [session?.access_token]);
   useEffect(() => { window.localStorage.setItem("questdeck-cards", JSON.stringify(cards)); }, [cards]);
   useEffect(() => {
+    const saved = window.localStorage.getItem("questdeck-column-names");
+    if (saved) {
+      try { setColumnNames(JSON.parse(saved)); } catch { /* Keep the standard workflow names. */ }
+    }
+  }, []);
+  useEffect(() => { window.localStorage.setItem("questdeck-column-names", JSON.stringify(columnNames)); }, [columnNames]);
+  useEffect(() => {
     fetch("/api/account").then(response => response.ok ? response.json() : null).then(data => data && setAccount(data)).catch(() => {});
     const savedMembers = window.localStorage.getItem("questdeck-members");
     const savedSettings = window.localStorage.getItem("questdeck-workspace-settings");
@@ -305,10 +316,37 @@ export default function Home() {
     const data = new FormData(event.currentTarget);
     const newCard: Card = {
       id: Date.now(), title: String(data.get("title")), description: String(data.get("description") || "A newly forged quest, ready for the team."),
-      tag: String(data.get("tag")), owner: "JK", points: Number(data.get("points")), color: "violet", status: "Ready", project: String(data.get("project")), due: "New",
+      tag: String(data.get("tag")), owner: "JK", points: Number(data.get("points")), color: "violet", status: createStatus, project: String(data.get("project")), due: "New",
     };
     setCards(prev => [newCard, ...prev]); setCreateOpen(false); setToast("Card added to your deck"); setView("quests");
     void syncQuestdeck("create_card", { card: newCard }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+  }
+
+  function openCreateCard(status: Status = "Ready") {
+    setCreateStatus(status);
+    setActiveColumnMenu(null);
+    if (session) setCreateOpen(true);
+    else setAuthOpen(true);
+  }
+
+  function renameColumn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editColumn) return;
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name")).trim();
+    setColumnNames(current => ({ ...current, [editColumn]: name }));
+    setEditColumn(null);
+    setToast(tr("Column name updated", "열 이름을 수정했습니다"));
+  }
+
+  function resetColumnName(status: Status) {
+    setColumnNames(current => {
+      const next = { ...current };
+      delete next[status];
+      return next;
+    });
+    setActiveColumnMenu(null);
+    setToast(tr("Column name reset", "열 이름을 기본값으로 되돌렸습니다"));
   }
 
   function updateStatus(card: Card, status: Status) {
@@ -583,7 +621,7 @@ export default function Home() {
         <button className={`auth-chip ${session ? "signed-in" : ""}`} onClick={() => session ? setView("account") : setAuthOpen(true)}>{session ? accountEmail : tr("Sign in", "로그인")}</button>
         <select className="language-select" value={language} onChange={event => setLanguage(event.target.value as "en" | "ko")} aria-label={tr("Language", "언어")}><option value="en">EN</option><option value="ko">한국어</option></select>
         <button className={`icon-button ${view === "activity" ? "active" : ""}`} aria-label="Activity" onClick={() => setView("activity")}>◌</button><button className={`icon-button ${notificationOpen ? "active" : ""}`} aria-label={`${unreadCount} unread notifications`} onClick={() => setNotificationOpen(open => !open)}>♧{unreadCount > 0 && <em>{unreadCount}</em>}</button>
-        <button className="create-button top-create" onClick={() => session ? setCreateOpen(true) : setAuthOpen(true)}><span>＋</span><b>{tr("Create card", "카드 만들기")}</b></button>
+        <button className="create-button top-create" onClick={() => openCreateCard()}><span>＋</span><b>{tr("Create card", "카드 만들기")}</b></button>
         {notificationOpen && <section className="notification-panel"><header><div><small>{tr("INBOX", "받은 알림")}</small><h3>{tr("Notifications", "알림")}</h3></div><button onClick={() => setNotifications(current => current.map(item => ({...item, read:true})))}>{tr("Mark all read", "모두 읽음")}</button></header><div className="notification-tabs"><button className="active">{tr("All", "전체")}</button><button>{tr("Mentions", "멘션")}</button><button>{tr("Assigned", "담당")}</button></div><div className="notification-list">{notifications.map(item => <button className={`notification-item ${item.read ? "read" : ""}`} key={item.id} onClick={() => openNotification(item)}><span className={`notification-avatar ${item.tone}`}>{item.icon}</span><div><b>{item.title}</b><p>{item.detail}</p><small>{item.time} {tr("ago", "전")}</small></div>{!item.read && <i />}</button>)}</div><footer><button onClick={() => { setNotificationOpen(false); setView("account"); }}>{tr("Notification settings", "알림 설정")} →</button></footer></section>}
       </header>
 
@@ -607,7 +645,7 @@ export default function Home() {
       {view === "quests" && <div className="content board-content">
         <div className="page-title"><div><p>{tr("PRODUCTION", "프로덕션")}</p><h1>{tr("Production board", "프로덕션 보드")}</h1><h2>{tr("Move every quest from idea to shipped.", "모든 퀘스트를 아이디어에서 출시까지 진행하세요.")}</h2></div><div className="board-actions"><select value={project} onChange={e => setProject(e.target.value)} aria-label={tr("Filter by project", "프로젝트 필터")}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{projects.map(p => <option key={p.name}>{p.name}</option>)}</select><button onClick={() => { setProject("All projects"); setQuery(""); }}>{tr("Clear filters", "필터 초기화")}</button></div></div>
         <div className="board">
-          {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className="board-column" key={status}><header><span className={`status-dot s${index}`}/><h3>{statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><button aria-label={`${status} options`}>•••</button></header><div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}<button className="add-inline" onClick={() => setCreateOpen(true)}>＋ {tr("Add a card", "카드 추가")}</button></div></section>)}
+          {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className="board-column" key={status}><header><span className={`status-dot s${index}`}/><h3>{columnNames[status] || statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><div className="column-menu-wrap"><button className={`column-menu-trigger ${activeColumnMenu === status ? "active" : ""}`} onClick={() => setActiveColumnMenu(current => current === status ? null : status)} aria-label={`${columnNames[status] || statusLabel(status)} ${tr("options", "옵션")}`} aria-expanded={activeColumnMenu === status}>•••</button>{activeColumnMenu === status && <div className="column-menu" role="menu"><button role="menuitem" onClick={() => openCreateCard(status)}>＋ <span>{tr("Add card here", "여기에 카드 추가")}</span></button><button role="menuitem" onClick={() => { setEditColumn(status); setActiveColumnMenu(null); }}>✎ <span>{tr("Rename column", "열 이름 변경")}</span></button>{columnNames[status] && <button role="menuitem" onClick={() => resetColumnName(status)}>↺ <span>{tr("Reset name", "기본 이름 복원")}</span></button>}</div>}</div></header><div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}<button className="add-inline" onClick={() => openCreateCard(status)}>＋ {tr("Add a card", "카드 추가")}</button></div></section>)}
         </div>
       </div>}
 
@@ -653,7 +691,9 @@ export default function Home() {
       </div>}
     </section>
 
-    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Forge a card", "카드 만들기")}</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus placeholder={tr("What needs to happen?", "어떤 작업이 필요한가요?")}/></label><label>{tr("Description", "설명")}<textarea name="description" placeholder={tr("Add context, goals, or acceptance notes…", "배경, 목표 또는 완료 조건을 입력하세요…")}/></label><div className="form-row"><label>{tr("Discipline", "분야")}<select name="tag"><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option></select></label><label>{tr("Effort", "작업량")}<select name="points"><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><label>{tr("Project", "프로젝트")}<select name="project">{projects.map(p => <option key={p.name}>{p.name}</option>)}</select></label><footer><button type="button" onClick={() => setCreateOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create card", "카드 만들기")}</button></footer></form></section></div>}
+    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Forge a card", "카드 만들기")}</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus placeholder={tr("What needs to happen?", "어떤 작업이 필요한가요?")}/></label><label>{tr("Description", "설명")}<textarea name="description" placeholder={tr("Add context, goals, or acceptance notes…", "배경, 목표 또는 완료 조건을 입력하세요…")}/></label><div className="form-row"><label>{tr("Discipline", "분야")}<select name="tag"><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option></select></label><label>{tr("Effort", "작업량")}<select name="points"><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project">{projects.map(p => <option key={p.name}>{p.name}</option>)}</select></label><label>{tr("Column", "열")}<select value={createStatus} onChange={event => setCreateStatus(event.target.value as Status)}>{productionStages.map(status => <option value={status} key={status}>{columnNames[status] || statusLabel(status)}</option>)}</select></label></div><footer><button type="button" onClick={() => setCreateOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create card", "카드 만들기")}</button></footer></form></section></div>}
+
+    {editColumn && <div className="modal-backdrop" onMouseDown={() => setEditColumn(null)}><section className="modal create-modal column-edit-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Rename column", "열 이름 변경")}><header><div><small>{tr("BOARD SETTINGS", "보드 설정")}</small><h2>{tr("Rename column", "열 이름 변경")}</h2></div><button onClick={() => setEditColumn(null)} aria-label="Close">×</button></header><form onSubmit={renameColumn}><label>{tr("Column name", "열 이름")}<input name="name" required autoFocus defaultValue={columnNames[editColumn] || statusLabel(editColumn)} maxLength={30} /></label><p className="form-help">{tr("This changes the label on this device; cards still keep their workflow stage.", "이 기기에서 표시되는 이름만 변경되며 카드의 작업 단계는 유지됩니다.")}</p><footer><button type="button" onClick={() => setEditColumn(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save name", "이름 저장")}</button></footer></form></section></div>}
 
     {inviteOpen && <div className="modal-backdrop" onMouseDown={() => setInviteOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Add a workspace member"><header><div><small>{tr("TEAM ACCESS", "팀 권한")}</small><h2>{tr("Add a member", "멤버 추가")}</h2></div><button onClick={() => setInviteOpen(false)} aria-label="Close">×</button></header><form onSubmit={inviteMember}><label>{tr("Name", "이름")}<input name="name" placeholder={tr("Teammate name", "팀원 이름")} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus placeholder="name@studio.com" /></label><label>{tr("Discipline", "분야")}<input name="discipline" placeholder={tr("Art, Audio, Production…", "아트, 오디오, 프로덕션…")} /></label><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role"><option>Member</option><option>Admin</option><option>Guest</option></select></label><div className="invite-note"><b>{tr("Access preview", "권한 미리보기")}</b><p>{tr("This email is added to workspace access. When that person signs in with the same email, their assigned role becomes active.", "이 이메일을 워크스페이스 권한에 추가합니다. 해당 사용자가 같은 이메일로 로그인하면 지정된 역할이 활성화됩니다.")}</p></div><footer><button type="button" onClick={() => setInviteOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Add member", "멤버 추가")}</button></footer></form></section></div>}
 
