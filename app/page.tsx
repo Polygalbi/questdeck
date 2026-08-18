@@ -12,7 +12,7 @@ type PermissionKey = "view_projects" | "edit_cards" | "manage_members" | "worksp
 type RolePermissions = Record<PermissionKey, boolean>;
 type RoleDefinition = { name: RoleName; description: string; color: string; permissions: RolePermissions };
 type Member = { id: number; name: string; email: string; initials: string; role: RoleName; discipline: string; status: "Active" | "Invited" };
-type Workspace = { id: string; name: string; initials: string; members: number; plan: string };
+type Workspace = { id: string; name: string; initials: string; members: number; status: "Active" | "Archived" };
 type Notification = { id: number; title: string; detail: string; time: string; icon: string; tone: string; read: boolean; destination: View };
 type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
 type SubTodo = { id: number; text: string; done: boolean };
@@ -76,8 +76,8 @@ const initialMembers: Member[] = [
 ];
 
 const initialWorkspaces: Workspace[] = [
-  { id: "starfall", name: "Starfall Studio", initials: "SF", members: 5, plan: "Studio" },
-  { id: "nightfall", name: "Nightfall Strike Team", initials: "NS", members: 3, plan: "Project" },
+  { id: "starfall", name: "Starfall Studio", initials: "SF", members: 5, status: "Active" },
+  { id: "nightfall", name: "Nightfall Strike Team", initials: "NS", members: 3, status: "Active" },
 ];
 
 const initialNotifications: Notification[] = [
@@ -215,11 +215,13 @@ export default function Home() {
     }
     void syncQuestdeck<{
       projects: Array<{ id: string; name: string; card_count: number; color: string; owner: string; status: Project["status"]; progress: number; updated_label: string }>;
+      workspaces: Array<{ id: string; name: string; initials: string; member_count: number; status: Workspace["status"] }>;
       members: Member[];
       roles: Array<{ role: RoleName } & RolePermissions>;
       permissions: RolePermissions;
     }>("load_admin", {}, session.access_token).then(data => {
       setProjects(data.projects.map(item => ({ id: item.id, name: item.name, count: item.card_count, color: item.color, owner: item.owner, status: item.status, progress: item.progress, updated: item.updated_label })));
+      setWorkspaces(data.workspaces.map(item => ({ id: item.id, name: item.name, initials: item.initials, members: item.member_count, status: item.status })));
       setMembers(data.members);
       setRoleDefinitions(initialRoleDefinitions.map(definition => {
         const saved = data.roles.find(role => role.role === definition.name);
@@ -246,7 +248,7 @@ export default function Home() {
     const savedLanguage = window.localStorage.getItem("questdeck-language");
     if (savedMembers) { try { setMembers(JSON.parse(savedMembers)); } catch {} }
     if (savedSettings) { try { const parsed = JSON.parse(savedSettings); setStudioName(parsed.studioName ?? "Starfall Studio"); setWeeklyDigest(parsed.weeklyDigest ?? true); } catch {} }
-    if (savedWorkspaces) { try { const parsed = JSON.parse(savedWorkspaces); setWorkspaces(parsed.workspaces ?? initialWorkspaces); setActiveWorkspaceId(parsed.activeWorkspaceId ?? "starfall"); } catch {} }
+    if (savedWorkspaces) { try { const parsed = JSON.parse(savedWorkspaces); setWorkspaces((parsed.workspaces ?? initialWorkspaces).map((workspace: Workspace) => ({ ...workspace, status: workspace.status ?? "Active" }))); setActiveWorkspaceId(parsed.activeWorkspaceId ?? "starfall"); } catch {} }
     if (savedNotifications) { try { setNotifications(JSON.parse(savedNotifications)); } catch {} }
     if (savedProjects) { try { setProjects(JSON.parse(savedProjects)); } catch {} }
     if (savedLanguage === "ko" || savedLanguage === "en") setLanguage(savedLanguage);
@@ -395,18 +397,59 @@ export default function Home() {
     setToast(`Switched to ${workspace.name}`);
   }
 
-  function createWorkspace(event: FormEvent<HTMLFormElement>) {
+  async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const data = new FormData(event.currentTarget);
-    const name = String(data.get("name"));
+    const name = String(data.get("name")).trim();
     const initials = name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
-    const workspace = { id: String(Date.now()), name, initials, members: 1, plan: String(data.get("plan")) };
-    setWorkspaces(current => [...current, workspace]);
-    setActiveWorkspaceId(workspace.id);
-    setStudioName(name);
-    setCreateWorkspaceOpen(false);
-    setWorkspaceOpen(false);
-    setToast(`${name} workspace created`);
+    const workspace: Workspace = { id: String(Date.now()), name, initials, members: 1, status: "Active" };
+    try {
+      await syncQuestdeck("create_workspace", { workspace }, accessToken);
+      setWorkspaces(current => [...current, workspace]);
+      setActiveWorkspaceId(workspace.id);
+      setStudioName(name);
+      setCreateWorkspaceOpen(false);
+      setWorkspaceOpen(false);
+      setToast(tr(`${name} workspace created`, `${name} 워크스페이스를 만들었습니다`));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not create workspace", "워크스페이스를 만들지 못했습니다"));
+    }
+  }
+
+  async function setWorkspaceStatus(workspace: Workspace, status: Workspace["status"]) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    try {
+      await syncQuestdeck("set_workspace_status", { workspaceId: workspace.id, status }, accessToken);
+      setWorkspaces(current => current.map(item => item.id === workspace.id ? { ...item, status } : item));
+      if (status === "Archived" && activeWorkspaceId === workspace.id) {
+        const fallback = workspaces.find(item => item.id !== workspace.id && item.status === "Active");
+        if (fallback) { setActiveWorkspaceId(fallback.id); setStudioName(fallback.name); }
+      }
+      setToast(status === "Archived" ? tr("Workspace archived", "워크스페이스를 보관했습니다") : tr("Workspace restored", "워크스페이스를 복원했습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not update workspace", "워크스페이스를 수정하지 못했습니다"));
+    }
+  }
+
+  async function deleteWorkspace(workspace: Workspace) {
+    const accessToken = requireSession();
+    if (!accessToken || !window.confirm(tr(`Permanently delete ${workspace.name}? This cannot be undone.`, `${workspace.name}을(를) 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.`))) return;
+    try {
+      await syncQuestdeck("delete_workspace", { workspaceId: workspace.id }, accessToken);
+      const remaining = workspaces.filter(item => item.id !== workspace.id);
+      setWorkspaces(remaining);
+      if (activeWorkspaceId === workspace.id) {
+        const fallback = remaining.find(item => item.status === "Active") ?? remaining[0];
+        setActiveWorkspaceId(fallback.id);
+        setStudioName(fallback.name);
+      }
+      setToast(tr("Workspace permanently deleted", "워크스페이스를 영구 삭제했습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not delete workspace", "워크스페이스를 삭제하지 못했습니다"));
+    }
   }
 
   async function saveMemberEdits(event: FormEvent<HTMLFormElement>) {
@@ -581,7 +624,7 @@ export default function Home() {
   const accountEmail = session?.user.email ?? account?.email ?? null;
   const accountName = account?.fullName ?? account?.displayName ?? accountEmail?.split("@")[0] ?? "Guest";
   const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
-  const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId) ?? workspaces[0];
+  const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId && workspace.status === "Active") ?? workspaces.find(workspace => workspace.status === "Active") ?? initialWorkspaces[0];
   const unreadCount = notifications.filter(notification => !notification.read).length;
   const visibleProjects = projects.filter(item => (projectStatusFilter === "All" || item.status === projectStatusFilter) && `${item.name} ${item.owner}`.toLowerCase().includes(projectSearch.toLowerCase()));
   const visibleMembers = members.filter(member => memberRoleFilter === "All" || member.role === memberRoleFilter);
@@ -594,7 +637,7 @@ export default function Home() {
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
       <div className="brand"><span className="brand-mark">Q</span><span>Questdeck</span><button className="sidebar-close" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation">×</button></div>
-      <div className="workspace-wrap"><button className={`workspace ${workspaceOpen ? "open" : ""}`} onClick={() => setWorkspaceOpen(open => !open)}><span className="workspace-icon">{activeWorkspace.initials}</span><span><small>{tr("WORKSPACE", "워크스페이스")}</small>{activeWorkspace.name}</span><b>⌄</b></button>{workspaceOpen && <div className="workspace-menu"><header><span>{tr("Your workspaces", "내 워크스페이스")}</span><button onClick={() => setWorkspaceOpen(false)}>×</button></header>{workspaces.map(workspace => <button className={`workspace-option ${workspace.id === activeWorkspaceId ? "active" : ""}`} key={workspace.id} onClick={() => switchWorkspace(workspace)}><span>{workspace.initials}</span><div><b>{workspace.name}</b><small>{workspace.members} {tr("members", "명")} · {workspace.plan}</small></div>{workspace.id === activeWorkspaceId && <i>✓</i>}</button>)}<footer><button onClick={() => { setCreateWorkspaceOpen(true); setWorkspaceOpen(false); }}>＋ {tr("Create workspace", "워크스페이스 만들기")}</button><button onClick={() => { setView("management"); setWorkspaceOpen(false); }}>⚙ {tr("Manage workspace", "워크스페이스 관리")}</button></footer></div>}</div>
+      <div className="workspace-wrap"><button className={`workspace ${workspaceOpen ? "open" : ""}`} onClick={() => setWorkspaceOpen(open => !open)}><span className="workspace-icon">{activeWorkspace.initials}</span><span><small>{tr("WORKSPACE", "워크스페이스")}</small>{activeWorkspace.name}</span><b>⌄</b></button>{workspaceOpen && <div className="workspace-menu"><header><span>{tr("Your workspaces", "내 워크스페이스")}</span><button onClick={() => setWorkspaceOpen(false)}>×</button></header>{workspaces.filter(workspace => workspace.status === "Active").map(workspace => <button className={`workspace-option ${workspace.id === activeWorkspaceId ? "active" : ""}`} key={workspace.id} onClick={() => switchWorkspace(workspace)}><span>{workspace.initials}</span><div><b>{workspace.name}</b><small>{workspace.members} {tr("members", "명")}</small></div>{workspace.id === activeWorkspaceId && <i>✓</i>}</button>)}<footer><button onClick={() => { setCreateWorkspaceOpen(true); setWorkspaceOpen(false); }}>＋ {tr("Create workspace", "워크스페이스 만들기")}</button><button onClick={() => { setView("management"); setWorkspaceOpen(false); }}>⚙ {tr("Manage workspaces", "워크스페이스 관리")}</button></footer></div>}</div>
       <nav>
         <p className="nav-label">{tr("PLAN", "계획")}</p>
         <button className={`nav-item ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")}><span>⌂</span> {tr("Overview", "개요")}</button>
@@ -614,7 +657,7 @@ export default function Home() {
     {mobileNavOpen && <button className="mobile-sidebar-backdrop" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation" />}
 
     <section className="workspace-main">
-      <header className="topbar">
+      <header className="topbar"><div className="topbar-inner">
         <button className="mobile-menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation"><span /><span /><span /></button>
         <label className="search">⌕ <input value={query} onChange={e => setQuery(e.target.value)} placeholder={tr("Search cards, decks, people…", "카드, 덱, 멤버 검색…")} aria-label={tr("Search cards", "카드 검색")}/><kbd>⌘ K</kbd></label>
         <span className={`data-source ${dataSource}`}><i />{dataSource === "supabase" ? tr("Supabase live", "Supabase 연결됨") : dataSource === "local" ? tr("Local mode", "로컬 모드") : tr("Connecting", "연결 중")}</span>
@@ -623,7 +666,7 @@ export default function Home() {
         <button className={`icon-button ${view === "activity" ? "active" : ""}`} aria-label="Activity" onClick={() => setView("activity")}>◌</button><button className={`icon-button ${notificationOpen ? "active" : ""}`} aria-label={`${unreadCount} unread notifications`} onClick={() => setNotificationOpen(open => !open)}>♧{unreadCount > 0 && <em>{unreadCount}</em>}</button>
         <button className="create-button top-create" onClick={() => openCreateCard()}><span>＋</span><b>{tr("Create card", "카드 만들기")}</b></button>
         {notificationOpen && <section className="notification-panel"><header><div><small>{tr("INBOX", "받은 알림")}</small><h3>{tr("Notifications", "알림")}</h3></div><button onClick={() => setNotifications(current => current.map(item => ({...item, read:true})))}>{tr("Mark all read", "모두 읽음")}</button></header><div className="notification-tabs"><button className="active">{tr("All", "전체")}</button><button>{tr("Mentions", "멘션")}</button><button>{tr("Assigned", "담당")}</button></div><div className="notification-list">{notifications.map(item => <button className={`notification-item ${item.read ? "read" : ""}`} key={item.id} onClick={() => openNotification(item)}><span className={`notification-avatar ${item.tone}`}>{item.icon}</span><div><b>{item.title}</b><p>{item.detail}</p><small>{item.time} {tr("ago", "전")}</small></div>{!item.read && <i />}</button>)}</div><footer><button onClick={() => { setNotificationOpen(false); setView("account"); }}>{tr("Notification settings", "알림 설정")} →</button></footer></section>}
-      </header>
+      </div></header>
 
       {view === "overview" && <div className="content">
         <div className="welcome"><div><p>{tr("MONDAY, AUGUST 18", "8월 18일 월요일")}</p><h1>{tr("Good morning, Jamie", "좋은 아침이에요, Jamie")} <span>✦</span></h1><h2>{tr("Here’s what’s moving in your world.", "오늘 스튜디오에서 진행 중인 작업이에요.")}</h2></div><div className="team"><span>MK</span><span>JL</span><span>AS</span><span>+4</span></div></div>
@@ -677,7 +720,7 @@ export default function Home() {
         <div className="page-title"><div><p>{tr("WORKSPACE ADMIN", "워크스페이스 관리")}</p><h1>{tr("Manage", "관리")} {studioName}</h1><h2>{tr("Control your team, permissions, and workspace defaults.", "팀, 권한, 워크스페이스 기본값을 관리하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.manage_members} onClick={() => setInviteOpen(true)}>＋ {tr("Add member", "멤버 추가")}</button></div>
         <div className="management-grid">
           <section className="management-card team-management"><header><div><small>TEAM & ACCESS</small><h3>{memberRoleFilter === "All" ? members.length : visibleMembers.length} {memberRoleFilter === "All" ? tr("workspace members", "명의 워크스페이스 멤버") : `${memberRoleFilter} ${tr("members", "멤버")}`}</h3>{memberRoleFilter !== "All" && <button className="role-filter" onClick={() => setMemberRoleFilter("All")}>× {tr("Clear filter", "필터 해제")}</button>}</div><button className="healthy-pill" onClick={() => setView("roles")}>{tr("Manage roles", "역할 관리")} →</button></header>{currentPermissions && !currentPermissions.manage_members ? <div className="access-denied"><b>{tr("Member management is restricted", "멤버 관리는 제한되어 있습니다")}</b><p>{tr("Ask an Owner or Admin to update workspace access.", "소유자 또는 관리자에게 워크스페이스 권한 변경을 요청하세요.")}</p></div> : <div className="member-list">{visibleMembers.map(member => <div className="member-row" key={member.id}><span className="member-avatar">{member.initials}</span><div className="member-identity"><b>{member.name}</b><small>{member.email} · {member.discipline}</small></div><span className={`member-status ${member.status.toLowerCase()}`}>{member.status}</span><span className="member-role">{member.role}</span><button className="row-menu" onClick={() => setEditMember(member)} aria-label={`Edit ${member.name}`}>✎</button></div>)}</div>}</section>
-          <aside className="management-side"><section className="management-card"><small>WORKSPACE PROFILE</small><label>Studio name<input value={studioName} onChange={event => setStudioName(event.target.value)} /></label><label>Default project<select><option>Project Nightfall</option><option>Marketing</option><option>Studio Ops</option></select></label><label className="toggle-row"><span><b>Weekly production digest</b><small>Monday summary for the team</small></span><input type="checkbox" checked={weeklyDigest} onChange={event => setWeeklyDigest(event.target.checked)} /></label><button className="secondary-button full-button" onClick={saveWorkspaceSettings}>Save preferences</button><p className="local-note">These workspace preferences are saved on this device.</p></section><section className="management-card plan-card"><small>WORKSPACE PLAN</small><h3>Studio</h3><p>5 active seats · 7 projects</p><div className="usage-track"><span style={{width:"62%"}} /></div><footer><span>31 GB of 50 GB</span><button>Manage plan</button></footer></section></aside>
+          <aside className="management-side"><section className="management-card"><small>{tr("WORKSPACE PROFILE", "워크스페이스 프로필")}</small><label>{tr("Studio name", "스튜디오 이름")}<input value={studioName} onChange={event => setStudioName(event.target.value)} /></label><label>{tr("Default project", "기본 프로젝트")}<select><option>Project Nightfall</option><option>Marketing</option><option>Studio Ops</option></select></label><label className="toggle-row"><span><b>{tr("Weekly production digest", "주간 프로덕션 요약")}</b><small>{tr("Monday summary for the team", "매주 월요일 팀 요약")}</small></span><input type="checkbox" checked={weeklyDigest} onChange={event => setWeeklyDigest(event.target.checked)} /></label><button className="secondary-button full-button" onClick={saveWorkspaceSettings}>{tr("Save preferences", "설정 저장")}</button><p className="local-note">{tr("These workspace preferences are saved on this device.", "이 워크스페이스 설정은 현재 기기에 저장됩니다.")}</p></section><section className="management-card workspace-directory-card"><header><div><small>{tr("YOUR WORKSPACES", "내 워크스페이스")}</small><h3>{tr("Manage workspaces", "워크스페이스 관리")}</h3></div><button onClick={() => setCreateWorkspaceOpen(true)} disabled={Boolean(session) && !currentPermissions?.workspace_settings}>＋ {tr("New", "추가")}</button></header><div className="workspace-admin-list">{workspaces.map(workspace => <article className={workspace.status === "Archived" ? "archived" : ""} key={workspace.id}><span>{workspace.initials}</span><div><b>{workspace.name}</b><small>{workspace.members} {tr("members", "명")} · {tr(workspace.status, workspace.status === "Active" ? "활성" : "보관됨")}</small></div><div className="workspace-admin-actions"><button disabled={Boolean(session) && !currentPermissions?.workspace_settings} onClick={() => void setWorkspaceStatus(workspace, workspace.status === "Active" ? "Archived" : "Active")}>{workspace.status === "Active" ? tr("Archive", "보관") : tr("Restore", "복원")}</button><button className="delete-workspace-button" disabled={workspaces.length <= 1 || !currentPermissions?.billing_security} onClick={() => void deleteWorkspace(workspace)}>{tr("Delete", "삭제")}</button></div></article>)}</div><p className="workspace-safety-note">{tr("Archived workspaces can be restored. Permanent deletion is limited to workspace owners.", "보관된 워크스페이스는 복원할 수 있습니다. 영구 삭제는 워크스페이스 소유자만 가능합니다.")}</p></section></aside>
         </div>
       </div>}
 
@@ -697,7 +740,7 @@ export default function Home() {
 
     {inviteOpen && <div className="modal-backdrop" onMouseDown={() => setInviteOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Add a workspace member"><header><div><small>{tr("TEAM ACCESS", "팀 권한")}</small><h2>{tr("Add a member", "멤버 추가")}</h2></div><button onClick={() => setInviteOpen(false)} aria-label="Close">×</button></header><form onSubmit={inviteMember}><label>{tr("Name", "이름")}<input name="name" placeholder={tr("Teammate name", "팀원 이름")} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus placeholder="name@studio.com" /></label><label>{tr("Discipline", "분야")}<input name="discipline" placeholder={tr("Art, Audio, Production…", "아트, 오디오, 프로덕션…")} /></label><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role"><option>Member</option><option>Admin</option><option>Guest</option></select></label><div className="invite-note"><b>{tr("Access preview", "권한 미리보기")}</b><p>{tr("This email is added to workspace access. When that person signs in with the same email, their assigned role becomes active.", "이 이메일을 워크스페이스 권한에 추가합니다. 해당 사용자가 같은 이메일로 로그인하면 지정된 역할이 활성화됩니다.")}</p></div><footer><button type="button" onClick={() => setInviteOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Add member", "멤버 추가")}</button></footer></form></section></div>}
 
-    {createWorkspaceOpen && <div className="modal-backdrop" onMouseDown={() => setCreateWorkspaceOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create workspace"><header><div><small>NEW SPACE</small><h2>Create a workspace</h2></div><button onClick={() => setCreateWorkspaceOpen(false)} aria-label="Close">×</button></header><form onSubmit={createWorkspace}><label>Workspace name<input name="name" required autoFocus placeholder="Your studio or team" /></label><label>Workspace type<select name="plan"><option>Studio</option><option>Project</option><option>Personal</option></select></label><div className="invite-note"><b>A fresh deck</b><p>Your new workspace starts with its own members, projects, and production settings.</p></div><footer><button type="button" onClick={() => setCreateWorkspaceOpen(false)}>Cancel</button><button className="create-button" type="submit">Create workspace</button></footer></form></section></div>}
+    {createWorkspaceOpen && <div className="modal-backdrop" onMouseDown={() => setCreateWorkspaceOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create workspace"><header><div><small>{tr("NEW SPACE", "새 공간")}</small><h2>{tr("Create a workspace", "워크스페이스 만들기")}</h2></div><button onClick={() => setCreateWorkspaceOpen(false)} aria-label="Close">×</button></header><form onSubmit={createWorkspace}><label>{tr("Workspace name", "워크스페이스 이름")}<input name="name" required autoFocus placeholder={tr("Your studio or team", "스튜디오 또는 팀 이름")} /></label><div className="invite-note"><b>{tr("A fresh deck", "새로운 덱")}</b><p>{tr("Your new workspace starts with its own members, projects, and production settings.", "새 워크스페이스는 독립적인 멤버, 프로젝트, 프로덕션 설정으로 시작합니다.")}</p></div><footer><button type="button" onClick={() => setCreateWorkspaceOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create workspace", "워크스페이스 만들기")}</button></footer></form></section></div>}
 
     {createProjectOpen && <div className="modal-backdrop" onMouseDown={() => setCreateProjectOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create project"><header><div><small>{tr("NEW PROJECT", "새 프로젝트")}</small><h2>{tr("Start a project", "프로젝트 시작")}</h2></div><button onClick={() => setCreateProjectOpen(false)} aria-label="Close">×</button></header><form onSubmit={createProject}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus placeholder={tr("Project name", "프로젝트 이름")} /></label><label>{tr("Project lead", "프로젝트 리드")}<select name="owner">{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Starting template", "시작 템플릿")}<select><option>{tr("Game production", "게임 프로덕션")}</option><option>{tr("Marketing campaign", "마케팅 캠페인")}</option><option>{tr("Studio operations", "스튜디오 운영")}</option><option>{tr("Blank project", "빈 프로젝트")}</option></select></label><footer><button type="button" onClick={() => setCreateProjectOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create project", "프로젝트 만들기")}</button></footer></form></section></div>}
 
