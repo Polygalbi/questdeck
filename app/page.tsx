@@ -121,6 +121,7 @@ export default function Home() {
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [projectStatusFilter, setProjectStatusFilter] = useState("All");
   const [activityFilter, setActivityFilter] = useState("All activity");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("questdeck-cards");
@@ -173,6 +174,7 @@ export default function Home() {
   useEffect(() => { window.localStorage.setItem("questdeck-notifications", JSON.stringify(notifications)); }, [notifications]);
   useEffect(() => { window.localStorage.setItem("questdeck-projects", JSON.stringify(projects)); }, [projects]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => window.clearTimeout(timer); }, [toast]);
+  useEffect(() => { setMobileNavOpen(false); }, [view]);
 
   const filtered = useMemo(() => cards.filter(card => {
     const matchesQuery = `${card.title} ${card.description} ${card.tag} ${card.project}`.toLowerCase().includes(query.toLowerCase());
@@ -267,8 +269,8 @@ export default function Home() {
   const visibleActivity = activityEvents.filter(item => activityFilter === "All activity" || item.type === activityFilter);
 
   return <main className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">Q</span><span>Questdeck</span></div>
+    <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
+      <div className="brand"><span className="brand-mark">Q</span><span>Questdeck</span><button className="sidebar-close" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation">×</button></div>
       <div className="workspace-wrap"><button className={`workspace ${workspaceOpen ? "open" : ""}`} onClick={() => setWorkspaceOpen(open => !open)}><span className="workspace-icon">{activeWorkspace.initials}</span><span><small>WORKSPACE</small>{activeWorkspace.name}</span><b>⌄</b></button>{workspaceOpen && <div className="workspace-menu"><header><span>Your workspaces</span><button onClick={() => setWorkspaceOpen(false)}>×</button></header>{workspaces.map(workspace => <button className={`workspace-option ${workspace.id === activeWorkspaceId ? "active" : ""}`} key={workspace.id} onClick={() => switchWorkspace(workspace)}><span>{workspace.initials}</span><div><b>{workspace.name}</b><small>{workspace.members} members · {workspace.plan}</small></div>{workspace.id === activeWorkspaceId && <i>✓</i>}</button>)}<footer><button onClick={() => { setCreateWorkspaceOpen(true); setWorkspaceOpen(false); }}>＋ Create workspace</button><button onClick={() => { setView("management"); setWorkspaceOpen(false); }}>⚙ Manage workspace</button></footer></div>}</div>
       <nav>
         <p className="nav-label">PLAN</p>
@@ -286,13 +288,15 @@ export default function Home() {
       </nav>
       <div className="sidebar-bottom"><button className="nav-item"><span>?</span> Help & shortcuts</button><button className="profile profile-button" onClick={() => setView("account")}><span>{accountInitials}</span><div><b>{accountName}</b><small>Producer · Owner</small></div><i>›</i></button></div>
     </aside>
+    {mobileNavOpen && <button className="mobile-sidebar-backdrop" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation" />}
 
     <section className="workspace-main">
       <header className="topbar">
+        <button className="mobile-menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation"><span /><span /><span /></button>
         <label className="search">⌕ <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search cards, decks, people…" aria-label="Search cards"/><kbd>⌘ K</kbd></label>
         <span className={`data-source ${dataSource}`}><i />{dataSource === "supabase" ? "Supabase live" : dataSource === "local" ? "Local mode" : "Connecting"}</span>
         <button className={`icon-button ${view === "activity" ? "active" : ""}`} aria-label="Activity" onClick={() => setView("activity")}>◌</button><button className={`icon-button ${notificationOpen ? "active" : ""}`} aria-label={`${unreadCount} unread notifications`} onClick={() => setNotificationOpen(open => !open)}>♧{unreadCount > 0 && <em>{unreadCount}</em>}</button>
-        <button className="create-button" onClick={() => setCreateOpen(true)}>＋ Create card</button>
+        <button className="create-button top-create" onClick={() => setCreateOpen(true)}><span>＋</span><b>Create card</b></button>
         {notificationOpen && <section className="notification-panel"><header><div><small>INBOX</small><h3>Notifications</h3></div><button onClick={() => setNotifications(current => current.map(item => ({...item, read:true})))}>Mark all read</button></header><div className="notification-tabs"><button className="active">All</button><button>Mentions</button><button>Assigned</button></div><div className="notification-list">{notifications.map(item => <button className={`notification-item ${item.read ? "read" : ""}`} key={item.id} onClick={() => openNotification(item)}><span className={`notification-avatar ${item.tone}`}>{item.icon}</span><div><b>{item.title}</b><p>{item.detail}</p><small>{item.time} ago</small></div>{!item.read && <i />}</button>)}</div><footer><button onClick={() => { setNotificationOpen(false); setView("account"); }}>Notification settings →</button></footer></section>}
       </header>
 
