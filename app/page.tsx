@@ -10,6 +10,7 @@ type Member = { id: number; name: string; email: string; initials: string; role:
 type Workspace = { id: string; name: string; initials: string; members: number; plan: string };
 type Notification = { id: number; title: string; detail: string; time: string; icon: string; tone: string; read: boolean; destination: View };
 type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
+type SubTodo = { id: number; text: string; done: boolean };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -82,6 +83,11 @@ const activityEvents = [
   { id: 6, person: "Jamie Kim", initials: "JK", action: "invited", target: "Robin Park", detail: "Member access · Marketing", project: "Marketing", type: "Team", time: "Yesterday", tone: "violet" },
 ];
 
+const initialSubTodos: Record<number, SubTodo[]> = {
+  1: [{ id: 101, text: "Verify keyboard controls", done: true }, { id: 102, text: "Test with controller", done: true }, { id: 103, text: "Capture playtest notes", done: false }],
+  3: [{ id: 301, text: "Choose final silhouette", done: true }, { id: 302, text: "Review arena lighting", done: false }],
+};
+
 const timelineDays = ["Mon 17", "Tue 18", "Wed 19", "Thu 20", "Fri 21", "Sat 22", "Sun 23", "Mon 24", "Tue 25", "Wed 26", "Thu 27", "Fri 28", "Sat 29", "Sun 30"];
 const timelineLanes = [
   { team: "DESIGN", owner: "MK", tone: "violet", bars: [{ title: "Movement tuning", start: 1, span: 3, progress: 74 }, { title: "Boss encounter", start: 5, span: 4, progress: 38 }, { title: "Difficulty pass", start: 10, span: 3, progress: 0 }] },
@@ -123,6 +129,7 @@ export default function Home() {
   const [activityFilter, setActivityFilter] = useState("All activity");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [language, setLanguage] = useState<"en" | "ko">("en");
+  const [subTodos, setSubTodos] = useState<Record<number, SubTodo[]>>(initialSubTodos);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("questdeck-cards");
@@ -165,12 +172,14 @@ export default function Home() {
     const savedNotifications = window.localStorage.getItem("questdeck-notifications");
     const savedProjects = window.localStorage.getItem("questdeck-projects");
     const savedLanguage = window.localStorage.getItem("questdeck-language");
+    const savedSubTodos = window.localStorage.getItem("questdeck-sub-todos");
     if (savedMembers) { try { setMembers(JSON.parse(savedMembers)); } catch {} }
     if (savedSettings) { try { const parsed = JSON.parse(savedSettings); setStudioName(parsed.studioName ?? "Starfall Studio"); setWeeklyDigest(parsed.weeklyDigest ?? true); } catch {} }
     if (savedWorkspaces) { try { const parsed = JSON.parse(savedWorkspaces); setWorkspaces(parsed.workspaces ?? initialWorkspaces); setActiveWorkspaceId(parsed.activeWorkspaceId ?? "starfall"); } catch {} }
     if (savedNotifications) { try { setNotifications(JSON.parse(savedNotifications)); } catch {} }
     if (savedProjects) { try { setProjects(JSON.parse(savedProjects)); } catch {} }
     if (savedLanguage === "ko" || savedLanguage === "en") setLanguage(savedLanguage);
+    if (savedSubTodos) { try { setSubTodos(JSON.parse(savedSubTodos)); } catch {} }
   }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-members", JSON.stringify(members)); }, [members]);
   useEffect(() => { window.localStorage.setItem("questdeck-workspaces", JSON.stringify({ workspaces, activeWorkspaceId })); }, [workspaces, activeWorkspaceId]);
@@ -179,6 +188,7 @@ export default function Home() {
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => { setMobileNavOpen(false); }, [view]);
   useEffect(() => { window.localStorage.setItem("questdeck-language", language); document.documentElement.lang = language; }, [language]);
+  useEffect(() => { window.localStorage.setItem("questdeck-sub-todos", JSON.stringify(subTodos)); }, [subTodos]);
 
   const filtered = useMemo(() => cards.filter(card => {
     const matchesQuery = `${card.title} ${card.description} ${card.tag} ${card.project}`.toLowerCase().includes(query.toLowerCase());
@@ -265,6 +275,26 @@ export default function Home() {
     setToast(`${item.name} ${status === "Archived" ? "archived" : "restored"}`);
   }
 
+  function addSubTodo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const text = String(data.get("subTodo")).trim();
+    if (!text) return;
+    setSubTodos(current => ({ ...current, [selected.id]: [...(current[selected.id] ?? []), { id: Date.now(), text, done: false }] }));
+    form.reset();
+    setToast(tr("Sub-task added", "하위 작업을 추가했습니다"));
+  }
+
+  function toggleSubTodo(cardId: number, todoId: number) {
+    setSubTodos(current => ({ ...current, [cardId]: (current[cardId] ?? []).map(todo => todo.id === todoId ? { ...todo, done: !todo.done } : todo) }));
+  }
+
+  function removeSubTodo(cardId: number, todoId: number) {
+    setSubTodos(current => ({ ...current, [cardId]: (current[cardId] ?? []).filter(todo => todo.id !== todoId) }));
+  }
+
   const accountName = account?.fullName ?? account?.displayName ?? "Jamie Kim";
   const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
   const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId) ?? workspaces[0];
@@ -273,6 +303,8 @@ export default function Home() {
   const visibleActivity = activityEvents.filter(item => activityFilter === "All activity" || item.type === activityFilter);
   const tr = (english: string, korean: string) => language === "ko" ? korean : english;
   const statusLabel = (status: Status | Project["status"]) => ({ Ready: tr("Ready", "준비"), "In progress": tr("In progress", "진행 중"), Review: tr("Review", "검토"), Done: tr("Done", "완료"), Active: tr("Active", "활성"), "On hold": tr("On hold", "보류"), Archived: tr("Archived", "보관됨") }[status]);
+  const selectedTodos = selected ? (subTodos[selected.id] ?? []) : [];
+  const completedSubTodos = selectedTodos.filter(todo => todo.done).length;
 
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
@@ -381,7 +413,7 @@ export default function Home() {
 
     {createProjectOpen && <div className="modal-backdrop" onMouseDown={() => setCreateProjectOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create project"><header><div><small>{tr("NEW PROJECT", "새 프로젝트")}</small><h2>{tr("Start a project", "프로젝트 시작")}</h2></div><button onClick={() => setCreateProjectOpen(false)} aria-label="Close">×</button></header><form onSubmit={createProject}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus placeholder={tr("Project name", "프로젝트 이름")} /></label><label>{tr("Project lead", "프로젝트 리드")}<select name="owner">{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Starting template", "시작 템플릿")}<select><option>{tr("Game production", "게임 프로덕션")}</option><option>{tr("Marketing campaign", "마케팅 캠페인")}</option><option>{tr("Studio operations", "스튜디오 운영")}</option><option>{tr("Blank project", "빈 프로젝트")}</option></select></label><footer><button type="button" onClick={() => setCreateProjectOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create project", "프로젝트 만들기")}</button></footer></form></section></div>}
 
-    {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2><p>{selected.description}</p><div className="detail-grid"><div><small>OWNER</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>DUE</small><b>◷ {selected.due}</b></div></div><label>Status<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option key={s}>{s}</option>)}</select></label><div className="checklist"><small>CHECKLIST · 2/3</small><p>✓ Verify keyboard controls</p><p>✓ Test with controller</p><p>○ Capture playtest notes</p></div></div></section></div>}
+    {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2><p>{selected.description}</p><div className="detail-grid"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>{tr("DUE", "마감")}</small><b>◷ {selected.due}</b></div></div><label>{tr("Status", "상태")}<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option value={s} key={s}>{statusLabel(s)}</option>)}</select></label><div className="subtodo-section"><header><div><small>{tr("SUB-TASKS", "하위 작업")}</small><b>{completedSubTodos}/{selectedTodos.length}</b></div>{selectedTodos.length > 0 && <div className="subtodo-progress"><span style={{width:`${Math.round((completedSubTodos / selectedTodos.length) * 100)}%`}} /></div>}</header><div className="subtodo-list">{selectedTodos.map(todo => <div className={`subtodo-row ${todo.done ? "done" : ""}`} key={todo.id}><button className="subtodo-check" onClick={() => toggleSubTodo(selected.id, todo.id)} aria-label={todo.done ? tr("Mark incomplete", "미완료로 표시") : tr("Mark complete", "완료로 표시")}>{todo.done ? "✓" : ""}</button><span>{todo.text}</span><button className="subtodo-remove" onClick={() => removeSubTodo(selected.id, todo.id)} aria-label={tr("Remove sub-task", "하위 작업 삭제")}>×</button></div>)}{selectedTodos.length === 0 && <p className="subtodo-empty">{tr("No sub-tasks yet. Break this card into smaller steps.", "아직 하위 작업이 없습니다. 카드를 더 작은 단계로 나눠보세요.")}</p>}</div><form className="subtodo-form" onSubmit={addSubTodo}><input name="subTodo" placeholder={tr("Add a sub-task…", "하위 작업 추가…")} aria-label={tr("New sub-task", "새 하위 작업")} /><button type="submit">＋ {tr("Add", "추가")}</button></form></div></div></section></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
