@@ -11,6 +11,8 @@ export async function POST(request: Request) {
     headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization },
   });
   if (!userResponse.ok) return Response.json({ error: "Session expired" }, { status: 401 });
+  const user = await userResponse.json() as { id?: string; email?: string };
+  if (!user.id || !user.email) return Response.json({ error: "Account identity is incomplete" }, { status: 401 });
 
   const syncUrl = process.env.QUESTDECK_SYNC_URL;
   const syncSecret = process.env.QUESTDECK_SYNC_SECRET;
@@ -21,6 +23,8 @@ export async function POST(request: Request) {
     headers: {
       "content-type": "application/json",
       "x-questdeck-sync-secret": syncSecret,
+      "x-questdeck-user-id": user.id,
+      "x-questdeck-user-email": user.email,
     },
     body: await request.text(),
   });

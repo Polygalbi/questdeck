@@ -7,7 +7,11 @@ type Status = "Ready" | "In progress" | "Review" | "Done";
 type View = "overview" | "quests" | "timeline" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; color: string; status: Status; project: string; due: string };
 type Account = { displayName: string; email: string; fullName: string | null };
-type Member = { id: number; name: string; email: string; initials: string; role: "Owner" | "Admin" | "Member" | "Guest"; discipline: string; status: "Active" | "Invited" };
+type RoleName = "Owner" | "Admin" | "Member" | "Guest";
+type PermissionKey = "view_projects" | "edit_cards" | "manage_members" | "workspace_settings" | "billing_security";
+type RolePermissions = Record<PermissionKey, boolean>;
+type RoleDefinition = { name: RoleName; description: string; color: string; permissions: RolePermissions };
+type Member = { id: number; name: string; email: string; initials: string; role: RoleName; discipline: string; status: "Active" | "Invited" };
 type Workspace = { id: string; name: string; initials: string; members: number; plan: string };
 type Notification = { id: number; title: string; detail: string; time: string; icon: string; tone: string; read: boolean; destination: View };
 type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
@@ -32,13 +36,15 @@ type SupabaseCard = {
 
 type SupabaseSubTodo = { id: number; card_id: number; text: string; done: boolean; sort_order: number };
 
-async function syncQuestdeck(action: string, payload: Record<string, unknown>, accessToken: string) {
+async function syncQuestdeck<T = { ok: boolean }>(action: string, payload: Record<string, unknown>, accessToken: string): Promise<T> {
   const response = await fetch("/api/questdeck-sync", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ action, ...payload }),
   });
-  if (!response.ok) throw new Error("Supabase sync failed");
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : "Supabase sync failed");
+  return data as T;
 }
 
 const initialCards: Card[] = [
@@ -61,7 +67,8 @@ const initialProjects: Project[] = [
 const productionStages: Status[] = ["Ready", "In progress", "Review", "Done"];
 
 const initialMembers: Member[] = [
-  { id: 1, name: "Jamie Kim", email: "jamie@starfall.studio", initials: "JK", role: "Owner", discipline: "Production", status: "Active" },
+  { id: 1000, name: "Polygalbi", email: "polygalbi@gmail.com", initials: "PO", role: "Owner", discipline: "Production", status: "Active" },
+  { id: 1, name: "Jamie Kim", email: "jamie@starfall.studio", initials: "JK", role: "Admin", discipline: "Production", status: "Active" },
   { id: 2, name: "Mina Kwon", email: "mina@starfall.studio", initials: "MK", role: "Admin", discipline: "Game Design", status: "Active" },
   { id: 3, name: "Alex Santos", email: "alex@starfall.studio", initials: "AS", role: "Member", discipline: "Art", status: "Active" },
   { id: 4, name: "Jules Lee", email: "jules@starfall.studio", initials: "JL", role: "Member", discipline: "Audio", status: "Active" },
@@ -80,11 +87,19 @@ const initialNotifications: Notification[] = [
   { id: 4, title: "Cave reverb zones completed", detail: "Jules finished an Audio card.", time: "Yesterday", icon: "JL", tone: "blue-card", read: true, destination: "overview" },
 ];
 
-const roleDefinitions = [
-  { name: "Owner", description: "Full workspace control, billing, and security.", color: "violet", count: 1, permissions: [true, true, true, true, true] },
-  { name: "Admin", description: "Manage members, projects, and production settings.", color: "coral", count: 1, permissions: [true, true, true, true, false] },
-  { name: "Member", description: "Create and update cards across assigned projects.", color: "mint", count: 3, permissions: [true, true, false, false, false] },
-  { name: "Guest", description: "Review and comment on specifically shared work.", color: "blue-card", count: 0, permissions: [true, false, false, false, false] },
+const initialRoleDefinitions: RoleDefinition[] = [
+  { name: "Owner", description: "Full workspace control, billing, and security.", color: "violet", permissions: { view_projects: true, edit_cards: true, manage_members: true, workspace_settings: true, billing_security: true } },
+  { name: "Admin", description: "Manage members, projects, and production settings.", color: "coral", permissions: { view_projects: true, edit_cards: true, manage_members: true, workspace_settings: true, billing_security: false } },
+  { name: "Member", description: "Create and update cards across assigned projects.", color: "mint", permissions: { view_projects: true, edit_cards: true, manage_members: false, workspace_settings: false, billing_security: false } },
+  { name: "Guest", description: "Review and comment on specifically shared work.", color: "blue-card", permissions: { view_projects: true, edit_cards: false, manage_members: false, workspace_settings: false, billing_security: false } },
+];
+
+const permissionRows: { key: PermissionKey; english: string; korean: string }[] = [
+  { key: "view_projects", english: "View projects", korean: "프로젝트 보기" },
+  { key: "edit_cards", english: "Create & edit cards", korean: "카드 만들기 및 편집" },
+  { key: "manage_members", english: "Manage members", korean: "멤버 관리" },
+  { key: "workspace_settings", english: "Workspace settings", korean: "워크스페이스 설정" },
+  { key: "billing_security", english: "Billing & security", korean: "결제 및 보안" },
 ];
 
 const activityEvents = [
@@ -138,7 +153,13 @@ export default function Home() {
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [projects, setProjects] = useState<Project[]>(initialProjects);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [editProject, setEditProject] = useState<Project | null>(null);
+  const [editMember, setEditMember] = useState<Member | null>(null);
+  const [roleDefinitions, setRoleDefinitions] = useState<RoleDefinition[]>(initialRoleDefinitions);
+  const [currentPermissions, setCurrentPermissions] = useState<RolePermissions | null>(null);
+  const [memberRoleFilter, setMemberRoleFilter] = useState<RoleName | "All">("All");
   const [projectStatusFilter, setProjectStatusFilter] = useState("All");
+  const [projectSearch, setProjectSearch] = useState("");
   const [activityFilter, setActivityFilter] = useState("All activity");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [language, setLanguage] = useState<"en" | "ko">("en");
@@ -183,6 +204,26 @@ export default function Home() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
     return () => subscription.unsubscribe();
   }, []);
+  useEffect(() => {
+    if (!session?.access_token) {
+      setCurrentPermissions(null);
+      return;
+    }
+    void syncQuestdeck<{
+      projects: Array<{ id: string; name: string; card_count: number; color: string; owner: string; status: Project["status"]; progress: number; updated_label: string }>;
+      members: Member[];
+      roles: Array<{ role: RoleName } & RolePermissions>;
+      permissions: RolePermissions;
+    }>("load_admin", {}, session.access_token).then(data => {
+      setProjects(data.projects.map(item => ({ id: item.id, name: item.name, count: item.card_count, color: item.color, owner: item.owner, status: item.status, progress: item.progress, updated: item.updated_label })));
+      setMembers(data.members);
+      setRoleDefinitions(initialRoleDefinitions.map(definition => {
+        const saved = data.roles.find(role => role.role === definition.name);
+        return saved ? { ...definition, permissions: { view_projects: saved.view_projects, edit_cards: saved.edit_cards, manage_members: saved.manage_members, workspace_settings: saved.workspace_settings, billing_security: saved.billing_security } } : definition;
+      }));
+      setCurrentPermissions(data.permissions);
+    }).catch(error => setToast(error instanceof Error ? error.message : tr("Could not load workspace access", "워크스페이스 권한을 불러오지 못했습니다")));
+  }, [session?.access_token]);
   useEffect(() => { window.localStorage.setItem("questdeck-cards", JSON.stringify(cards)); }, [cards]);
   useEffect(() => {
     fetch("/api/account").then(response => response.ok ? response.json() : null).then(data => data && setAccount(data)).catch(() => {});
@@ -279,15 +320,23 @@ export default function Home() {
     void syncQuestdeck("update_card", { card: updated }, accessToken).catch(() => setToast(tr("Status saved locally; Supabase sync failed", "상태는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
-  function inviteMember(event: FormEvent<HTMLFormElement>) {
+  async function inviteMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const data = new FormData(event.currentTarget);
-    const email = String(data.get("email"));
+    const email = String(data.get("email")).trim().toLowerCase();
     const name = String(data.get("name") || email.split("@")[0]);
     const initials = name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
-    setMembers(current => [...current, { id: Date.now(), name, email, initials, role: String(data.get("role")) as Member["role"], discipline: "New teammate", status: "Invited" }]);
-    setInviteOpen(false);
-    setToast(`Invitation prepared for ${email}`);
+    const member: Member = { id: Date.now(), name, email, initials, role: String(data.get("role")) as Member["role"], discipline: String(data.get("discipline") || "General"), status: "Invited" };
+    try {
+      await syncQuestdeck("add_member", { member }, accessToken);
+      setMembers(current => [...current, member]);
+      setInviteOpen(false);
+      setToast(tr(`${name} was added to workspace access`, `${name}님을 워크스페이스 권한에 추가했습니다`));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not add member", "멤버를 추가하지 못했습니다"));
+    }
   }
 
   function saveWorkspaceSettings() {
@@ -322,26 +371,118 @@ export default function Home() {
     setToast(`${name} workspace created`);
   }
 
-  function updateMemberRole(member: Member, role: Member["role"]) {
-    setMembers(current => current.map(item => item.id === member.id ? { ...item, role } : item));
-    setToast(`${member.name} is now ${role}`);
+  async function saveMemberEdits(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editMember) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name")).trim();
+    const updated: Member = {
+      ...editMember,
+      name,
+      email: String(data.get("email")).trim().toLowerCase(),
+      initials: name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(),
+      role: String(data.get("role")) as RoleName,
+      discipline: String(data.get("discipline")).trim(),
+      status: String(data.get("status")) as Member["status"],
+    };
+    try {
+      await syncQuestdeck("update_member", { member: updated }, accessToken);
+      setMembers(current => current.map(item => item.id === updated.id ? updated : item));
+      setEditMember(null);
+      setToast(tr("Member access updated", "멤버 권한을 수정했습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not update member", "멤버를 수정하지 못했습니다"));
+    }
   }
 
-  function createProject(event: FormEvent<HTMLFormElement>) {
+  async function removeMember(member: Member) {
+    const accessToken = requireSession();
+    if (!accessToken || !window.confirm(tr(`Remove ${member.name} from this workspace?`, `${member.name}님을 이 워크스페이스에서 삭제할까요?`))) return;
+    try {
+      await syncQuestdeck("remove_member", { memberId: member.id }, accessToken);
+      setMembers(current => current.filter(item => item.id !== member.id));
+      setEditMember(null);
+      setToast(tr("Member removed", "멤버를 삭제했습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not remove member", "멤버를 삭제하지 못했습니다"));
+    }
+  }
+
+  async function createProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const data = new FormData(event.currentTarget);
     const name = String(data.get("name"));
     const colors = ["purple", "yellow", "blue"];
     const newProject: Project = { id: String(Date.now()), name, count: 0, color: colors[projects.length % colors.length], owner: String(data.get("owner")), status: "Active", progress: 0, updated: "Just now" };
-    setProjects(current => [...current, newProject]);
-    setCreateProjectOpen(false);
-    setToast(`${name} project created`);
+    try {
+      await syncQuestdeck("create_project", { project: newProject }, accessToken);
+      setProjects(current => [...current, newProject]);
+      setCreateProjectOpen(false);
+      setToast(`${name} project created`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not create project", "프로젝트를 만들지 못했습니다"));
+    }
   }
 
-  function toggleProjectArchive(item: Project) {
+  async function saveProjectEdits(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editProject) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const data = new FormData(event.currentTarget);
+    const updated: Project = {
+      ...editProject,
+      name: String(data.get("name")).trim(),
+      owner: String(data.get("owner")),
+      status: String(data.get("status")) as Project["status"],
+      progress: Number(data.get("progress")),
+      color: String(data.get("color")),
+      updated: "Just now",
+    };
+    try {
+      await syncQuestdeck("update_project", { project: updated }, accessToken);
+      setProjects(current => current.map(item => item.id === updated.id ? updated : item));
+      setCards(current => current.map(card => card.project === editProject.name ? { ...card, project: updated.name } : card));
+      if (project === editProject.name) setProject(updated.name);
+      setEditProject(null);
+      setToast(tr("Project updated", "프로젝트를 수정했습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not update project", "프로젝트를 수정하지 못했습니다"));
+    }
+  }
+
+  async function toggleProjectArchive(item: Project) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const status = item.status === "Archived" ? "Active" : "Archived";
-    setProjects(current => current.map(projectItem => projectItem.id === item.id ? { ...projectItem, status, updated: "Just now" } : projectItem));
-    setToast(`${item.name} ${status === "Archived" ? "archived" : "restored"}`);
+    const updated = { ...item, status, updated: "Just now" };
+    try {
+      await syncQuestdeck("update_project", { project: updated }, accessToken);
+      setProjects(current => current.map(projectItem => projectItem.id === item.id ? updated : projectItem));
+      setToast(`${item.name} ${status === "Archived" ? "archived" : "restored"}`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not update project", "프로젝트를 수정하지 못했습니다"));
+    }
+  }
+
+  async function toggleRolePermission(roleName: RoleName, key: PermissionKey) {
+    if (roleName === "Owner") return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const definition = roleDefinitions.find(role => role.name === roleName);
+    if (!definition) return;
+    const permissions = { ...definition.permissions, [key]: !definition.permissions[key], billing_security: false };
+    try {
+      await syncQuestdeck("update_role_permissions", { role: roleName, permissions }, accessToken);
+      setRoleDefinitions(current => current.map(role => role.name === roleName ? { ...role, permissions } : role));
+      setToast(tr(`${roleName} permissions updated`, `${roleName} 권한을 수정했습니다`));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not update permissions", "권한을 수정하지 못했습니다"));
+    }
   }
 
   function addSubTodo(event: FormEvent<HTMLFormElement>) {
@@ -404,7 +545,8 @@ export default function Home() {
   const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
   const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId) ?? workspaces[0];
   const unreadCount = notifications.filter(notification => !notification.read).length;
-  const visibleProjects = projects.filter(item => projectStatusFilter === "All" || item.status === projectStatusFilter);
+  const visibleProjects = projects.filter(item => (projectStatusFilter === "All" || item.status === projectStatusFilter) && `${item.name} ${item.owner}`.toLowerCase().includes(projectSearch.toLowerCase()));
+  const visibleMembers = members.filter(member => memberRoleFilter === "All" || member.role === memberRoleFilter);
   const visibleActivity = activityEvents.filter(item => activityFilter === "All activity" || item.type === activityFilter);
   const tr = (english: string, korean: string) => language === "ko" ? korean : english;
   const statusLabel = (status: Status | Project["status"]) => ({ Ready: tr("Ready", "준비"), "In progress": tr("In progress", "진행 중"), Review: tr("Review", "검토"), Done: tr("Done", "완료"), Active: tr("Active", "활성"), "On hold": tr("On hold", "보류"), Archived: tr("Archived", "보관됨") }[status]);
@@ -494,16 +636,16 @@ export default function Home() {
       </div>}
 
       {view === "management" && <div className="content manage-content">
-        <div className="page-title"><div><p>{tr("WORKSPACE ADMIN", "워크스페이스 관리")}</p><h1>{tr("Manage", "관리")} {studioName}</h1><h2>{tr("Control your team, permissions, and workspace defaults.", "팀, 권한, 워크스페이스 기본값을 관리하세요.")}</h2></div><button className="create-button" onClick={() => setInviteOpen(true)}>＋ {tr("Invite member", "멤버 초대")}</button></div>
+        <div className="page-title"><div><p>{tr("WORKSPACE ADMIN", "워크스페이스 관리")}</p><h1>{tr("Manage", "관리")} {studioName}</h1><h2>{tr("Control your team, permissions, and workspace defaults.", "팀, 권한, 워크스페이스 기본값을 관리하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.manage_members} onClick={() => setInviteOpen(true)}>＋ {tr("Add member", "멤버 추가")}</button></div>
         <div className="management-grid">
-          <section className="management-card team-management"><header><div><small>TEAM & ACCESS</small><h3>{members.length} workspace members</h3></div><button className="healthy-pill" onClick={() => setView("roles")}>Manage roles →</button></header><div className="member-list">{members.map(member => <div className="member-row" key={member.id}><span className="member-avatar">{member.initials}</span><div className="member-identity"><b>{member.name}</b><small>{member.email} · {member.discipline}</small></div><span className={`member-status ${member.status.toLowerCase()}`}>{member.status}</span><select value={member.role} disabled={member.role === "Owner"} onChange={event => updateMemberRole(member, event.target.value as Member["role"])} aria-label={`Role for ${member.name}`}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select><button className="row-menu" aria-label={`More options for ${member.name}`}>•••</button></div>)}</div></section>
+          <section className="management-card team-management"><header><div><small>TEAM & ACCESS</small><h3>{memberRoleFilter === "All" ? members.length : visibleMembers.length} {memberRoleFilter === "All" ? tr("workspace members", "명의 워크스페이스 멤버") : `${memberRoleFilter} ${tr("members", "멤버")}`}</h3>{memberRoleFilter !== "All" && <button className="role-filter" onClick={() => setMemberRoleFilter("All")}>× {tr("Clear filter", "필터 해제")}</button>}</div><button className="healthy-pill" onClick={() => setView("roles")}>{tr("Manage roles", "역할 관리")} →</button></header>{currentPermissions && !currentPermissions.manage_members ? <div className="access-denied"><b>{tr("Member management is restricted", "멤버 관리는 제한되어 있습니다")}</b><p>{tr("Ask an Owner or Admin to update workspace access.", "소유자 또는 관리자에게 워크스페이스 권한 변경을 요청하세요.")}</p></div> : <div className="member-list">{visibleMembers.map(member => <div className="member-row" key={member.id}><span className="member-avatar">{member.initials}</span><div className="member-identity"><b>{member.name}</b><small>{member.email} · {member.discipline}</small></div><span className={`member-status ${member.status.toLowerCase()}`}>{member.status}</span><span className="member-role">{member.role}</span><button className="row-menu" onClick={() => setEditMember(member)} aria-label={`Edit ${member.name}`}>✎</button></div>)}</div>}</section>
           <aside className="management-side"><section className="management-card"><small>WORKSPACE PROFILE</small><label>Studio name<input value={studioName} onChange={event => setStudioName(event.target.value)} /></label><label>Default project<select><option>Project Nightfall</option><option>Marketing</option><option>Studio Ops</option></select></label><label className="toggle-row"><span><b>Weekly production digest</b><small>Monday summary for the team</small></span><input type="checkbox" checked={weeklyDigest} onChange={event => setWeeklyDigest(event.target.checked)} /></label><button className="secondary-button full-button" onClick={saveWorkspaceSettings}>Save preferences</button><p className="local-note">These workspace preferences are saved on this device.</p></section><section className="management-card plan-card"><small>WORKSPACE PLAN</small><h3>Studio</h3><p>5 active seats · 7 projects</p><div className="usage-track"><span style={{width:"62%"}} /></div><footer><span>31 GB of 50 GB</span><button>Manage plan</button></footer></section></aside>
         </div>
       </div>}
 
-      {view === "projects-management" && <div className="content projects-admin-content"><div className="page-title"><div><p>{tr("PORTFOLIO", "포트폴리오")}</p><h1>{tr("Manage projects", "프로젝트 관리")}</h1><h2>{tr("Create, organize, and monitor every stream of studio work.", "스튜디오의 모든 작업을 만들고 정리하고 모니터링하세요.")}</h2></div><button className="create-button" onClick={() => setCreateProjectOpen(true)}>＋ {tr("New project", "새 프로젝트")}</button></div><div className="project-admin-toolbar"><div>{["All","Active","On hold","Archived"].map(status => <button className={projectStatusFilter === status ? "active" : ""} onClick={() => setProjectStatusFilter(status)} key={status}>{status === "All" ? tr("All", "전체") : statusLabel(status as Project["status"])}<span>{status === "All" ? projects.length : projects.filter(item => item.status === status).length}</span></button>)}</div><label>⌕ <input placeholder={tr("Search projects…", "프로젝트 검색…")} /></label></div><section className="project-admin-list">{visibleProjects.map(item => <article className="project-admin-card" key={item.id}><span className={`project-color ${item.color}`} /><div className="project-main"><header><div><small>{statusLabel(item.status)}</small><h3>{item.name}</h3></div><button aria-label={`Options for ${item.name}`}>•••</button></header><p><span className="member-avatar">{item.owner.split(/\s+/).map(part => part[0]).join("")}</span> {tr("Led by", "담당")} {item.owner}</p><div className="project-progress"><div><span style={{width:`${item.progress}%`}} /></div><b>{item.progress}%</b></div><footer><span><b>{item.count}</b> {tr("cards", "카드")}</span><span>{tr("Updated", "업데이트")} {item.updated}</span></footer></div><aside><button onClick={() => { setProject(item.name); setView("quests"); }}>{tr("Open board", "보드 열기")} →</button><button onClick={() => toggleProjectArchive(item)}>{item.status === "Archived" ? tr("Restore project", "프로젝트 복원") : tr("Archive project", "프로젝트 보관")}</button></aside></article>)}</section>{visibleProjects.length === 0 && <div className="empty-projects"><span>◇</span><h3>{tr("No projects here", "프로젝트가 없습니다")}</h3><p>{tr("Change the filter or create a new project.", "필터를 변경하거나 새 프로젝트를 만드세요.")}</p></div>}</div>}
+      {view === "projects-management" && <div className="content projects-admin-content"><div className="page-title"><div><p>{tr("PORTFOLIO", "포트폴리오")}</p><h1>{tr("Manage projects", "프로젝트 관리")}</h1><h2>{tr("Create, organize, and monitor every stream of studio work.", "스튜디오의 모든 작업을 만들고 정리하고 모니터링하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.workspace_settings} onClick={() => setCreateProjectOpen(true)}>＋ {tr("New project", "새 프로젝트")}</button></div><div className="project-admin-toolbar"><div>{["All","Active","On hold","Archived"].map(status => <button className={projectStatusFilter === status ? "active" : ""} onClick={() => setProjectStatusFilter(status)} key={status}>{status === "All" ? tr("All", "전체") : statusLabel(status as Project["status"])}<span>{status === "All" ? projects.length : projects.filter(item => item.status === status).length}</span></button>)}</div><label>⌕ <input value={projectSearch} onChange={event => setProjectSearch(event.target.value)} placeholder={tr("Search projects…", "프로젝트 검색…")} /></label></div><section className="project-admin-list">{visibleProjects.map(item => <article className="project-admin-card" key={item.id}><span className={`project-color ${item.color}`} /><div className="project-main"><header><div><small>{statusLabel(item.status)}</small><h3>{item.name}</h3></div><button onClick={() => setEditProject(item)} aria-label={`Edit ${item.name}`}>✎</button></header><p><span className="member-avatar">{item.owner.split(/\s+/).map(part => part[0]).join("")}</span> {tr("Led by", "담당")} {item.owner}</p><div className="project-progress"><div><span style={{width:`${item.progress}%`}} /></div><b>{item.progress}%</b></div><footer><span><b>{item.count}</b> {tr("cards", "카드")}</span><span>{tr("Updated", "업데이트")} {item.updated}</span></footer></div><aside><button onClick={() => { setProject(item.name); setView("quests"); }}>{tr("Open board", "보드 열기")} →</button><button onClick={() => setEditProject(item)}>✎ {tr("Edit project", "프로젝트 수정")}</button><button onClick={() => void toggleProjectArchive(item)}>{item.status === "Archived" ? tr("Restore project", "프로젝트 복원") : tr("Archive project", "프로젝트 보관")}</button></aside></article>)}</section>{visibleProjects.length === 0 && <div className="empty-projects"><span>◇</span><h3>{tr("No projects here", "프로젝트가 없습니다")}</h3><p>{tr("Change the filter or create a new project.", "필터를 변경하거나 새 프로젝트를 만드세요.")}</p></div>}</div>}
 
-      {view === "roles" && <div className="content roles-content"><div className="page-title"><div><p>{tr("PERMISSIONS", "권한")}</p><h1>{tr("Roles & access", "역할 및 권한")}</h1><h2>{tr("Choose what each teammate can see, change, and manage.", "각 팀원이 보고 변경하고 관리할 수 있는 항목을 설정하세요.")}</h2></div><button className="secondary-button" onClick={() => { setView("management"); setInviteOpen(true); }}>＋ {tr("Assign a role", "역할 지정")}</button></div><div className="role-cards">{roleDefinitions.map(role => <article className="role-card" key={role.name}><span className={`role-icon ${role.color}`}>{role.name[0]}</span><div><small>{role.count} {tr(role.count === 1 ? "PERSON" : "PEOPLE", "명")}</small><h3>{role.name}</h3><p>{role.description}</p></div><button onClick={() => setToast(`${role.name} permissions selected`)}>{tr("View members", "멤버 보기")} →</button></article>)}</div><section className="management-card permission-matrix"><header><div><small>{tr("ACCESS MATRIX", "권한 매트릭스")}</small><h3>{tr("Role permissions", "역할 권한")}</h3></div><span>{tr("Changes apply across", "적용 대상")} {activeWorkspace.name}</span></header><div className="matrix-row matrix-head"><b>{tr("Capability", "기능")}</b>{roleDefinitions.map(role => <b key={role.name}>{role.name}</b>)}</div>{[["View projects","프로젝트 보기"],["Create & edit cards","카드 만들기 및 편집"],["Manage members","멤버 관리"],["Workspace settings","워크스페이스 설정"],["Billing & security","결제 및 보안"]].map(([permission,korean],index) => <div className="matrix-row" key={permission}><span>{tr(permission,korean)}</span>{roleDefinitions.map(role => <i className={role.permissions[index] ? "allowed" : "denied"} key={role.name}>{role.permissions[index] ? "✓" : "—"}</i>)}</div>)}</section></div>}
+      {view === "roles" && <div className="content roles-content"><div className="page-title"><div><p>{tr("PERMISSIONS", "권한")}</p><h1>{tr("Roles & access", "역할 및 권한")}</h1><h2>{tr("Choose what each teammate can see, change, and manage.", "각 팀원이 보고 변경하고 관리할 수 있는 항목을 설정하세요.")}</h2></div><button className="secondary-button" disabled={Boolean(session) && !currentPermissions?.manage_members} onClick={() => { setView("management"); setInviteOpen(true); }}>＋ {tr("Assign a role", "역할 지정")}</button></div><div className="role-cards">{roleDefinitions.map(role => { const roleCount = members.filter(member => member.role === role.name).length; return <article className="role-card" key={role.name}><span className={`role-icon ${role.color}`}>{role.name[0]}</span><div><small>{roleCount} {tr(roleCount === 1 ? "PERSON" : "PEOPLE", "명")}</small><h3>{role.name}</h3><p>{role.description}</p></div><button onClick={() => { setMemberRoleFilter(role.name); setView("management"); }}>{tr("View members", "멤버 보기")} →</button></article>; })}</div><section className="management-card permission-matrix"><header><div><small>{tr("ACCESS MATRIX", "권한 매트릭스")}</small><h3>{tr("Role permissions", "역할 권한")}</h3></div><span>{currentPermissions?.billing_security ? tr("Click a permission to change it", "권한을 클릭하여 변경하세요") : `${tr("Changes apply across", "적용 대상")} ${activeWorkspace.name}`}</span></header><div className="matrix-row matrix-head"><b>{tr("Capability", "기능")}</b>{roleDefinitions.map(role => <b key={role.name}>{role.name}</b>)}</div>{permissionRows.map(permission => <div className="matrix-row" key={permission.key}><span>{tr(permission.english,permission.korean)}</span>{roleDefinitions.map(role => <button className={`permission-toggle ${role.permissions[permission.key] ? "allowed" : "denied"}`} disabled={role.name === "Owner" || !currentPermissions?.billing_security} onClick={() => void toggleRolePermission(role.name, permission.key)} aria-label={`${role.name}: ${permission.english}`} key={role.name}>{role.permissions[permission.key] ? "✓" : "—"}</button>)}</div>)}</section></div>}
 
       {view === "account" && <div className="content account-content">
         <div className="page-title"><div><p>{tr("PERSONAL SETTINGS", "개인 설정")}</p><h1>{tr("My account", "내 계정")}</h1><h2>{tr("Your identity, preferences, and active access.", "계정 정보, 환경설정, 접근 권한을 관리하세요.")}</h2></div><button className="secondary-button signout-link" onClick={() => session ? void supabase.auth.signOut() : setAuthOpen(true)}>{session ? tr("Sign out", "로그아웃") : tr("Sign in", "로그인")}</button></div>
@@ -513,11 +655,15 @@ export default function Home() {
 
     {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Forge a card", "카드 만들기")}</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus placeholder={tr("What needs to happen?", "어떤 작업이 필요한가요?")}/></label><label>{tr("Description", "설명")}<textarea name="description" placeholder={tr("Add context, goals, or acceptance notes…", "배경, 목표 또는 완료 조건을 입력하세요…")}/></label><div className="form-row"><label>{tr("Discipline", "분야")}<select name="tag"><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option></select></label><label>{tr("Effort", "작업량")}<select name="points"><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><label>{tr("Project", "프로젝트")}<select name="project">{projects.map(p => <option key={p.name}>{p.name}</option>)}</select></label><footer><button type="button" onClick={() => setCreateOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create card", "카드 만들기")}</button></footer></form></section></div>}
 
-    {inviteOpen && <div className="modal-backdrop" onMouseDown={() => setInviteOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Invite a workspace member"><header><div><small>{tr("TEAM ACCESS", "팀 권한")}</small><h2>{tr("Invite a member", "멤버 초대")}</h2></div><button onClick={() => setInviteOpen(false)} aria-label="Close">×</button></header><form onSubmit={inviteMember}><label>{tr("Name", "이름")}<input name="name" placeholder={tr("Teammate name", "팀원 이름")} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus placeholder="name@studio.com" /></label><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role"><option>Member</option><option>Admin</option><option>Guest</option></select></label><div className="invite-note"><b>{tr("Access preview", "권한 미리보기")}</b><p>{tr("Members can view all workspace projects and update assigned cards. You can change this role anytime.", "멤버는 모든 워크스페이스 프로젝트를 보고 담당 카드를 업데이트할 수 있습니다. 역할은 언제든 변경할 수 있습니다.")}</p></div><footer><button type="button" onClick={() => setInviteOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Prepare invitation", "초대 준비")}</button></footer></form></section></div>}
+    {inviteOpen && <div className="modal-backdrop" onMouseDown={() => setInviteOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Add a workspace member"><header><div><small>{tr("TEAM ACCESS", "팀 권한")}</small><h2>{tr("Add a member", "멤버 추가")}</h2></div><button onClick={() => setInviteOpen(false)} aria-label="Close">×</button></header><form onSubmit={inviteMember}><label>{tr("Name", "이름")}<input name="name" placeholder={tr("Teammate name", "팀원 이름")} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus placeholder="name@studio.com" /></label><label>{tr("Discipline", "분야")}<input name="discipline" placeholder={tr("Art, Audio, Production…", "아트, 오디오, 프로덕션…")} /></label><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role"><option>Member</option><option>Admin</option><option>Guest</option></select></label><div className="invite-note"><b>{tr("Access preview", "권한 미리보기")}</b><p>{tr("This email is added to workspace access. When that person signs in with the same email, their assigned role becomes active.", "이 이메일을 워크스페이스 권한에 추가합니다. 해당 사용자가 같은 이메일로 로그인하면 지정된 역할이 활성화됩니다.")}</p></div><footer><button type="button" onClick={() => setInviteOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Add member", "멤버 추가")}</button></footer></form></section></div>}
 
     {createWorkspaceOpen && <div className="modal-backdrop" onMouseDown={() => setCreateWorkspaceOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create workspace"><header><div><small>NEW SPACE</small><h2>Create a workspace</h2></div><button onClick={() => setCreateWorkspaceOpen(false)} aria-label="Close">×</button></header><form onSubmit={createWorkspace}><label>Workspace name<input name="name" required autoFocus placeholder="Your studio or team" /></label><label>Workspace type<select name="plan"><option>Studio</option><option>Project</option><option>Personal</option></select></label><div className="invite-note"><b>A fresh deck</b><p>Your new workspace starts with its own members, projects, and production settings.</p></div><footer><button type="button" onClick={() => setCreateWorkspaceOpen(false)}>Cancel</button><button className="create-button" type="submit">Create workspace</button></footer></form></section></div>}
 
     {createProjectOpen && <div className="modal-backdrop" onMouseDown={() => setCreateProjectOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create project"><header><div><small>{tr("NEW PROJECT", "새 프로젝트")}</small><h2>{tr("Start a project", "프로젝트 시작")}</h2></div><button onClick={() => setCreateProjectOpen(false)} aria-label="Close">×</button></header><form onSubmit={createProject}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus placeholder={tr("Project name", "프로젝트 이름")} /></label><label>{tr("Project lead", "프로젝트 리드")}<select name="owner">{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Starting template", "시작 템플릿")}<select><option>{tr("Game production", "게임 프로덕션")}</option><option>{tr("Marketing campaign", "마케팅 캠페인")}</option><option>{tr("Studio operations", "스튜디오 운영")}</option><option>{tr("Blank project", "빈 프로젝트")}</option></select></label><footer><button type="button" onClick={() => setCreateProjectOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create project", "프로젝트 만들기")}</button></footer></form></section></div>}
+
+    {editProject && <div className="modal-backdrop" onMouseDown={() => setEditProject(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit project", "프로젝트 수정")}><header><div><small>{tr("PROJECT SETTINGS", "프로젝트 설정")}</small><h2>{tr("Edit project", "프로젝트 수정")}</h2></div><button onClick={() => setEditProject(null)} aria-label="Close">×</button></header><form onSubmit={saveProjectEdits}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus defaultValue={editProject.name} /></label><div className="form-row"><label>{tr("Project lead", "프로젝트 리드")}<select name="owner" defaultValue={editProject.owner}>{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editProject.status}><option>Active</option><option>On hold</option><option>Archived</option></select></label></div><div className="form-row"><label>{tr("Progress", "진행률")}<input name="progress" type="number" min="0" max="100" defaultValue={editProject.progress} /></label><label>{tr("Color", "색상")}<select name="color" defaultValue={editProject.color}><option value="purple">Purple</option><option value="yellow">Yellow</option><option value="blue">Blue</option></select></label></div><footer><button type="button" onClick={() => setEditProject(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save project", "프로젝트 저장")}</button></footer></form></section></div>}
+
+    {editMember && <div className="modal-backdrop" onMouseDown={() => setEditMember(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit member", "멤버 수정")}><header><div><small>{tr("MEMBER ACCESS", "멤버 권한")}</small><h2>{tr("Edit member", "멤버 수정")}</h2></div><button onClick={() => setEditMember(null)} aria-label="Close">×</button></header><form onSubmit={saveMemberEdits}><label>{tr("Name", "이름")}<input name="name" required autoFocus defaultValue={editMember.name} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required defaultValue={editMember.email} /></label><div className="form-row"><label>{tr("Discipline", "분야")}<input name="discipline" required defaultValue={editMember.discipline} /></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editMember.status}><option>Active</option><option>Invited</option></select></label></div><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role" defaultValue={editMember.role} disabled={editMember.role === "Owner"}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select>{editMember.role === "Owner" && <input type="hidden" name="role" value="Owner" />}</label><footer className="member-edit-footer">{editMember.role !== "Owner" ? <button className="danger-button" type="button" onClick={() => void removeMember(editMember)}>{tr("Remove member", "멤버 삭제")}</button> : <span />}<div><button type="button" onClick={() => setEditMember(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save member", "멤버 저장")}</button></div></footer></form></section></div>}
 
     {selected && !editCardOpen && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><div className="detail-title-row"><div><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2></div><button className="edit-card-button" onClick={() => setEditCardOpen(true)}>✎ {tr("Edit card", "카드 수정")}</button></div><p>{selected.description}</p><div className="detail-grid"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>{tr("DUE", "마감")}</small><b>◷ {selected.due}</b></div></div><label>{tr("Status", "상태")}<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option value={s} key={s}>{statusLabel(s)}</option>)}</select></label><div className="subtodo-section"><header><div><small>{tr("SUB-TASKS", "하위 작업")}</small><b>{completedSubTodos}/{selectedTodos.length}</b></div>{selectedTodos.length > 0 && <div className="subtodo-progress"><span style={{width:`${Math.round((completedSubTodos / selectedTodos.length) * 100)}%`}} /></div>}</header><div className="subtodo-list">{selectedTodos.map(todo => <div className={`subtodo-row ${todo.done ? "done" : ""}`} key={todo.id}><button className="subtodo-check" onClick={() => toggleSubTodo(selected.id, todo.id)} aria-label={todo.done ? tr("Mark incomplete", "미완료로 표시") : tr("Mark complete", "완료로 표시")}>{todo.done ? "✓" : ""}</button><span>{todo.text}</span><button className="subtodo-remove" onClick={() => removeSubTodo(selected.id, todo.id)} aria-label={tr("Remove sub-task", "하위 작업 삭제")}>×</button></div>)}{selectedTodos.length === 0 && <p className="subtodo-empty">{tr("No sub-tasks yet. Break this card into smaller steps.", "아직 하위 작업이 없습니다. 카드를 더 작은 단계로 나눠보세요.")}</p>}</div><form className="subtodo-form" onSubmit={addSubTodo}><input name="subTodo" placeholder={tr("Add a sub-task…", "하위 작업 추가…")} aria-label={tr("New sub-task", "새 하위 작업")} /><button type="submit">＋ {tr("Add", "추가")}</button></form></div></div></section></div>}
 
