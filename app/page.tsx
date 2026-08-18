@@ -6,6 +6,22 @@ type Status = "Ready" | "In progress" | "Review" | "Done";
 type View = "overview" | "quests" | "timeline" | "milestones";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; color: string; status: Status; project: string; due: string };
 
+const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
+
+type SupabaseCard = {
+  id: number;
+  title: string;
+  description: string;
+  tag: string;
+  owner_initials: string;
+  points: number;
+  color: string;
+  status: Status;
+  due_label: string;
+  questdeck_projects: { name: string };
+};
+
 const initialCards: Card[] = [
   { id: 1, title: "Tune player movement", description: "Make traversal feel crisp and responsive before the next playtest.", tag: "GAMEPLAY", owner: "MK", points: 3, color: "violet", status: "In progress", project: "Project Nightfall", due: "Today" },
   { id: 2, title: "Forest ambience pass", description: "Layer environmental loops for the northern forest biome.", tag: "AUDIO", owner: "JL", points: 2, color: "mint", status: "Ready", project: "Project Nightfall", due: "Today" },
@@ -42,6 +58,7 @@ function QuestCard({ card, onOpen, compact = false }: { card: Card; onOpen: (car
 
 export default function Home() {
   const [cards, setCards] = useState<Card[]>(initialCards);
+  const [dataSource, setDataSource] = useState<"connecting" | "supabase" | "local">("connecting");
   const [view, setView] = useState<View>("overview");
   const [query, setQuery] = useState("");
   const [project, setProject] = useState("All projects");
@@ -51,7 +68,35 @@ export default function Home() {
 
   useEffect(() => {
     const stored = window.localStorage.getItem("questdeck-cards");
-    if (stored) { try { setCards(JSON.parse(stored)); } catch {} }
+    let localCards: Card[] = [];
+    if (stored) { try { localCards = JSON.parse(stored); setCards(localCards); } catch {} }
+
+    fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,color,status,due_label,questdeck_projects(name)&order=id.asc`, {
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY },
+    })
+      .then(response => {
+        if (!response.ok) throw new Error("Supabase request failed");
+        return response.json() as Promise<SupabaseCard[]>;
+      })
+      .then(remoteCards => {
+        const localById = new Map(localCards.map(card => [card.id, card]));
+        const remoteIds = new Set(remoteCards.map(card => card.id));
+        const mapped = remoteCards.map(card => localById.get(card.id) ?? ({
+          id: card.id,
+          title: card.title,
+          description: card.description,
+          tag: card.tag,
+          owner: card.owner_initials,
+          points: card.points,
+          color: card.color,
+          status: card.status,
+          project: card.questdeck_projects.name,
+          due: card.due_label,
+        } satisfies Card));
+        setCards([...mapped, ...localCards.filter(card => !remoteIds.has(card.id))]);
+        setDataSource("supabase");
+      })
+      .catch(() => setDataSource("local"));
   }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-cards", JSON.stringify(cards)); }, [cards]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => window.clearTimeout(timer); }, [toast]);
@@ -95,6 +140,7 @@ export default function Home() {
     <section className="workspace-main">
       <header className="topbar">
         <label className="search">⌕ <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search cards, decks, people…" aria-label="Search cards"/><kbd>⌘ K</kbd></label>
+        <span className={`data-source ${dataSource}`}><i />{dataSource === "supabase" ? "Supabase live" : dataSource === "local" ? "Local mode" : "Connecting"}</span>
         <button className="icon-button" aria-label="Activity">◌</button><button className="icon-button" aria-label="Notifications">♧<em>3</em></button>
         <button className="create-button" onClick={() => setCreateOpen(true)}>＋ Create card</button>
       </header>
