@@ -3,8 +3,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "timeline" | "milestones";
+type View = "overview" | "quests" | "timeline" | "milestones" | "management" | "account";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; color: string; status: Status; project: string; due: string };
+type Account = { displayName: string; email: string; fullName: string | null };
+type Member = { id: number; name: string; email: string; initials: string; role: "Owner" | "Admin" | "Member" | "Guest"; discipline: string; status: "Active" | "Invited" };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -41,6 +43,14 @@ const projects = [
 
 const productionStages: Status[] = ["Ready", "In progress", "Review", "Done"];
 
+const initialMembers: Member[] = [
+  { id: 1, name: "Jamie Kim", email: "jamie@starfall.studio", initials: "JK", role: "Owner", discipline: "Production", status: "Active" },
+  { id: 2, name: "Mina Kwon", email: "mina@starfall.studio", initials: "MK", role: "Admin", discipline: "Game Design", status: "Active" },
+  { id: 3, name: "Alex Santos", email: "alex@starfall.studio", initials: "AS", role: "Member", discipline: "Art", status: "Active" },
+  { id: 4, name: "Jules Lee", email: "jules@starfall.studio", initials: "JL", role: "Member", discipline: "Audio", status: "Active" },
+  { id: 5, name: "Noah Kim", email: "noah@starfall.studio", initials: "NK", role: "Member", discipline: "Engineering", status: "Active" },
+];
+
 const timelineDays = ["Mon 17", "Tue 18", "Wed 19", "Thu 20", "Fri 21", "Sat 22", "Sun 23", "Mon 24", "Tue 25", "Wed 26", "Thu 27", "Fri 28", "Sat 29", "Sun 30"];
 const timelineLanes = [
   { team: "DESIGN", owner: "MK", tone: "violet", bars: [{ title: "Movement tuning", start: 1, span: 3, progress: 74 }, { title: "Boss encounter", start: 5, span: 4, progress: 38 }, { title: "Difficulty pass", start: 10, span: 3, progress: 0 }] },
@@ -65,6 +75,11 @@ export default function Home() {
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<Card | null>(null);
   const [toast, setToast] = useState("");
+  const [account, setAccount] = useState<Account | null>(null);
+  const [members, setMembers] = useState<Member[]>(initialMembers);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [studioName, setStudioName] = useState("Starfall Studio");
+  const [weeklyDigest, setWeeklyDigest] = useState(true);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("questdeck-cards");
@@ -99,6 +114,14 @@ export default function Home() {
       .catch(() => setDataSource("local"));
   }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-cards", JSON.stringify(cards)); }, [cards]);
+  useEffect(() => {
+    fetch("/api/account").then(response => response.ok ? response.json() : null).then(data => data && setAccount(data)).catch(() => {});
+    const savedMembers = window.localStorage.getItem("questdeck-members");
+    const savedSettings = window.localStorage.getItem("questdeck-workspace-settings");
+    if (savedMembers) { try { setMembers(JSON.parse(savedMembers)); } catch {} }
+    if (savedSettings) { try { const parsed = JSON.parse(savedSettings); setStudioName(parsed.studioName ?? "Starfall Studio"); setWeeklyDigest(parsed.weeklyDigest ?? true); } catch {} }
+  }, []);
+  useEffect(() => { window.localStorage.setItem("questdeck-members", JSON.stringify(members)); }, [members]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => window.clearTimeout(timer); }, [toast]);
 
   const filtered = useMemo(() => cards.filter(card => {
@@ -121,20 +144,42 @@ export default function Home() {
     setSelected({ ...card, status }); setToast(`Moved to ${status}`);
   }
 
+  function inviteMember(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const email = String(data.get("email"));
+    const name = String(data.get("name") || email.split("@")[0]);
+    const initials = name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase();
+    setMembers(current => [...current, { id: Date.now(), name, email, initials, role: String(data.get("role")) as Member["role"], discipline: "New teammate", status: "Invited" }]);
+    setInviteOpen(false);
+    setToast(`Invitation prepared for ${email}`);
+  }
+
+  function saveWorkspaceSettings() {
+    window.localStorage.setItem("questdeck-workspace-settings", JSON.stringify({ studioName, weeklyDigest }));
+    setToast("Workspace preferences saved on this device");
+  }
+
+  const accountName = account?.fullName ?? account?.displayName ?? "Jamie Kim";
+  const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
+
   return <main className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">Q</span><span>Questdeck</span></div>
-      <button className="workspace"><span className="workspace-icon">SF</span><span><small>WORKSPACE</small>Starfall Studio</span><b>⌄</b></button>
+      <button className="workspace" onClick={() => setView("management")}><span className="workspace-icon">SF</span><span><small>WORKSPACE</small>{studioName}</span><b>⌄</b></button>
       <nav>
         <p className="nav-label">PLAN</p>
         <button className={`nav-item ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")}><span>⌂</span> Overview</button>
         <button className={`nav-item ${view === "quests" ? "active" : ""}`} onClick={() => setView("quests")}><span>▤</span> Production board <i>{cards.filter(c => c.status !== "Done").length}</i></button>
         <button className={`nav-item ${view === "timeline" ? "active" : ""}`} onClick={() => setView("timeline")}><span>↔</span> Timeline</button>
         <button className={`nav-item ${view === "milestones" ? "active" : ""}`} onClick={() => setView("milestones")}><span>◎</span> Milestones</button>
+        <p className="nav-label">MANAGE</p>
+        <button className={`nav-item ${view === "management" ? "active" : ""}`} onClick={() => setView("management")}><span>⚙</span> Workspace</button>
+        <button className={`nav-item ${view === "account" ? "active" : ""}`} onClick={() => setView("account")}><span>◉</span> My account</button>
         <p className="nav-label">PROJECTS</p>
         {projects.map(item => <button className="nav-item" key={item.name} onClick={() => { setProject(item.name); setView("quests"); }}><span className={`dot ${item.color}`} /> {item.name}<i>{item.count}</i></button>)}
       </nav>
-      <div className="sidebar-bottom"><button className="nav-item"><span>?</span> Help & shortcuts</button><div className="profile"><span>JK</span><div><b>Jamie Kim</b><small>Producer</small></div><button aria-label="Profile options">•••</button></div></div>
+      <div className="sidebar-bottom"><button className="nav-item"><span>?</span> Help & shortcuts</button><button className="profile profile-button" onClick={() => setView("account")}><span>{accountInitials}</span><div><b>{accountName}</b><small>Producer · Owner</small></div><i>›</i></button></div>
     </aside>
 
     <section className="workspace-main">
@@ -190,9 +235,24 @@ export default function Home() {
           {[{date:"AUG 30",title:"Festival demo",progress:68,color:"violet",cards:"34 / 50 cards",note:"Playable demo for the Autumn Game Showcase"},{date:"SEP 27",title:"Content complete",progress:41,color:"mint",cards:"28 / 68 cards",note:"All chapters and production assets locked"},{date:"NOV 14",title:"Gold candidate",progress:18,color:"coral",cards:"12 / 66 cards",note:"Release-ready build for platform certification"}].map((m, i) => <article className="milestone-row" key={m.title}><div className="date-token"><small>2026</small><b>{m.date}</b></div><span className={`timeline-node ${m.color}`}>{i + 1}</span><div className="milestone-card"><div className="milestone-card-head"><div><small>{i === 0 ? "UP NEXT" : i === 1 ? "PRODUCTION" : "RELEASE"}</small><h3>{m.title}</h3><p>{m.note}</p></div><b>{m.progress}%</b></div><div className="progress-track"><span className={m.color} style={{width:`${m.progress}%`}}/></div><footer><span>{m.cards}</span><span>{i === 0 ? "12 days left" : i === 1 ? "40 days left" : "88 days left"}</span></footer></div></article>)}
         </div>
       </div>}
+
+      {view === "management" && <div className="content manage-content">
+        <div className="page-title"><div><p>WORKSPACE ADMIN</p><h1>Manage {studioName}</h1><h2>Control your team, permissions, and workspace defaults.</h2></div><button className="create-button" onClick={() => setInviteOpen(true)}>＋ Invite member</button></div>
+        <div className="management-grid">
+          <section className="management-card team-management"><header><div><small>TEAM & ACCESS</small><h3>{members.length} workspace members</h3></div><span className="healthy-pill">All systems healthy</span></header><div className="member-list">{members.map(member => <div className="member-row" key={member.id}><span className="member-avatar">{member.initials}</span><div className="member-identity"><b>{member.name}</b><small>{member.email} · {member.discipline}</small></div><span className={`member-status ${member.status.toLowerCase()}`}>{member.status}</span><select value={member.role} disabled={member.role === "Owner"} onChange={event => setMembers(current => current.map(item => item.id === member.id ? {...item, role: event.target.value as Member["role"]} : item))} aria-label={`Role for ${member.name}`}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select><button className="row-menu" aria-label={`More options for ${member.name}`}>•••</button></div>)}</div></section>
+          <aside className="management-side"><section className="management-card"><small>WORKSPACE PROFILE</small><label>Studio name<input value={studioName} onChange={event => setStudioName(event.target.value)} /></label><label>Default project<select><option>Project Nightfall</option><option>Marketing</option><option>Studio Ops</option></select></label><label className="toggle-row"><span><b>Weekly production digest</b><small>Monday summary for the team</small></span><input type="checkbox" checked={weeklyDigest} onChange={event => setWeeklyDigest(event.target.checked)} /></label><button className="secondary-button full-button" onClick={saveWorkspaceSettings}>Save preferences</button><p className="local-note">These workspace preferences are saved on this device.</p></section><section className="management-card plan-card"><small>WORKSPACE PLAN</small><h3>Studio</h3><p>5 active seats · 7 projects</p><div className="usage-track"><span style={{width:"62%"}} /></div><footer><span>31 GB of 50 GB</span><button>Manage plan</button></footer></section></aside>
+        </div>
+      </div>}
+
+      {view === "account" && <div className="content account-content">
+        <div className="page-title"><div><p>PERSONAL SETTINGS</p><h1>My account</h1><h2>Your identity, preferences, and active access.</h2></div><a className="secondary-button signout-link" href="/signout-with-chatgpt?return_to=%2F">Sign out</a></div>
+        <div className="account-grid"><section className="management-card account-hero"><div className="account-avatar">{accountInitials}</div><div><small>SIGNED IN WITH CHATGPT</small><h2>{accountName}</h2><p>{account?.email ?? "Secure workspace account"}</p><span className="verified-badge">✓ Verified identity</span></div></section><section className="management-card account-details"><small>ACCOUNT DETAILS</small><div className="detail-line"><span>Email</span><b>{account?.email ?? "Loading account…"}</b></div><div className="detail-line"><span>Workspace role</span><b>Owner</b></div><div className="detail-line"><span>Primary discipline</span><b>Production</b></div><div className="detail-line"><span>Access</span><b>All projects</b></div></section><section className="management-card account-preferences"><small>NOTIFICATIONS</small><label className="toggle-row"><span><b>Assigned card updates</b><small>Changes to cards you own</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Milestone reminders</b><small>Three days before deadlines</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Studio activity</b><small>Daily collaboration summary</small></span><input type="checkbox" /></label></section><section className="management-card sessions-card"><small>SECURITY</small><h3>Active session</h3><p>Signed in through ChatGPT · Current browser</p><span className="healthy-pill">Protected</span></section></div>
+      </div>}
     </section>
 
     {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>NEW QUEST</small><h2>Forge a card</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>Card title<input name="title" required autoFocus placeholder="What needs to happen?"/></label><label>Description<textarea name="description" placeholder="Add context, goals, or acceptance notes…"/></label><div className="form-row"><label>Discipline<select name="tag"><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option></select></label><label>Effort<select name="points"><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><label>Project<select name="project">{projects.map(p => <option key={p.name}>{p.name}</option>)}</select></label><footer><button type="button" onClick={() => setCreateOpen(false)}>Cancel</button><button className="create-button" type="submit">Create card</button></footer></form></section></div>}
+
+    {inviteOpen && <div className="modal-backdrop" onMouseDown={() => setInviteOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Invite a workspace member"><header><div><small>TEAM ACCESS</small><h2>Invite a member</h2></div><button onClick={() => setInviteOpen(false)} aria-label="Close">×</button></header><form onSubmit={inviteMember}><label>Name<input name="name" placeholder="Teammate name" /></label><label>Email<input name="email" type="email" required autoFocus placeholder="name@studio.com" /></label><label>Workspace role<select name="role"><option>Member</option><option>Admin</option><option>Guest</option></select></label><div className="invite-note"><b>Access preview</b><p>Members can view all workspace projects and update assigned cards. You can change this role anytime.</p></div><footer><button type="button" onClick={() => setInviteOpen(false)}>Cancel</button><button className="create-button" type="submit">Prepare invitation</button></footer></form></section></div>}
 
     {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2><p>{selected.description}</p><div className="detail-grid"><div><small>OWNER</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>DUE</small><b>◷ {selected.due}</b></div></div><label>Status<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option key={s}>{s}</option>)}</select></label><div className="checklist"><small>CHECKLIST · 2/3</small><p>✓ Verify keyboard controls</p><p>✓ Test with controller</p><p>○ Capture playtest notes</p></div></div></section></div>}
     {toast && <div className="toast">✓ {toast}</div>}
