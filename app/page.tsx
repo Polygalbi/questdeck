@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "milestones";
+type View = "overview" | "quests" | "timeline" | "milestones";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; color: string; status: Status; project: string; due: string };
 
 const initialCards: Card[] = [
@@ -24,6 +24,14 @@ const projects = [
 ];
 
 const productionStages: Status[] = ["Ready", "In progress", "Review", "Done"];
+
+const timelineDays = ["Mon 17", "Tue 18", "Wed 19", "Thu 20", "Fri 21", "Sat 22", "Sun 23", "Mon 24", "Tue 25", "Wed 26", "Thu 27", "Fri 28", "Sat 29", "Sun 30"];
+const timelineLanes = [
+  { team: "DESIGN", owner: "MK", tone: "violet", bars: [{ title: "Movement tuning", start: 1, span: 3, progress: 74 }, { title: "Boss encounter", start: 5, span: 4, progress: 38 }, { title: "Difficulty pass", start: 10, span: 3, progress: 0 }] },
+  { team: "ART", owner: "AS", tone: "coral", bars: [{ title: "Forest props", start: 0, span: 4, progress: 100 }, { title: "Arena concepts", start: 4, span: 5, progress: 62 }, { title: "Demo polish", start: 10, span: 4, progress: 0 }] },
+  { team: "CODE", owner: "NK", tone: "blue-card", bars: [{ title: "Input remapping", start: 2, span: 4, progress: 55 }, { title: "Save system QA", start: 7, span: 3, progress: 15 }, { title: "Build candidate", start: 11, span: 3, progress: 0 }] },
+  { team: "AUDIO", owner: "JL", tone: "mint", bars: [{ title: "Forest ambience", start: 1, span: 5, progress: 81 }, { title: "Boss mix", start: 8, span: 4, progress: 20 }] },
+];
 
 function QuestCard({ card, onOpen, compact = false }: { card: Card; onOpen: (card: Card) => void; compact?: boolean }) {
   return <button className={`quest-card ${compact ? "compact" : ""}`} onClick={() => onOpen(card)} aria-label={`Open ${card.title}`}>
@@ -76,6 +84,7 @@ export default function Home() {
         <p className="nav-label">PLAN</p>
         <button className={`nav-item ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")}><span>⌂</span> Overview</button>
         <button className={`nav-item ${view === "quests" ? "active" : ""}`} onClick={() => setView("quests")}><span>▤</span> Production board <i>{cards.filter(c => c.status !== "Done").length}</i></button>
+        <button className={`nav-item ${view === "timeline" ? "active" : ""}`} onClick={() => setView("timeline")}><span>↔</span> Timeline</button>
         <button className={`nav-item ${view === "milestones" ? "active" : ""}`} onClick={() => setView("milestones")}><span>◎</span> Milestones</button>
         <p className="nav-label">PROJECTS</p>
         {projects.map(item => <button className="nav-item" key={item.name} onClick={() => { setProject(item.name); setView("quests"); }}><span className={`dot ${item.color}`} /> {item.name}<i>{item.count}</i></button>)}
@@ -112,6 +121,23 @@ export default function Home() {
         </div>
       </div>}
 
+      {view === "timeline" && <div className="content schedule-content">
+        <div className="page-title timeline-title"><div><p>PRODUCTION SCHEDULE</p><h1>Timeline</h1><h2>See every team’s card runs, handoffs, and deadlines in one place.</h2></div><div className="timeline-controls"><button>‹</button><button className="today-button">Today</button><button>›</button><select aria-label="Timeline scale"><option>2 weeks</option><option>Month</option><option>Quarter</option></select></div></div>
+        <section className="schedule-shell">
+          <header className="schedule-month"><div className="lane-corner"><span>TEAMS</span><b>August 2026</b></div><div className="month-band"><span>Week 34</span><i>Festival demo · Aug 30</i></div></header>
+          <div className="schedule-scroll">
+            <div className="date-grid"><div className="date-label-spacer"/>{timelineDays.map((day, index) => { const [weekday, date] = day.split(" "); return <div className={`date-cell ${index === 1 ? "today" : ""} ${index === 5 || index === 6 || index === 12 || index === 13 ? "weekend" : ""}`} key={day}><small>{weekday}</small><b>{date}</b></div>})}</div>
+            <div className="schedule-body">
+              <div className="today-line" aria-hidden="true"><span>Today</span></div>
+              <div className="deadline-marker deadline-one" title="Playtest checkpoint"><span>◆</span><small>Playtest</small></div>
+              <div className="deadline-marker deadline-two" title="Content lock"><span>◆</span><small>Content lock</small></div>
+              {timelineLanes.map((lane, laneIndex) => <div className="schedule-row" key={lane.team}><div className="lane-label"><span className={`lane-swatch ${lane.tone}`}/><div><b>{lane.team}</b><small>{lane.owner} · {lane.bars.length} runs</small></div></div><div className="lane-track">{lane.bars.map((bar, barIndex) => <button className={`run-bar ${lane.tone}`} style={{gridColumn:`${bar.start + 1} / span ${bar.span}`}} key={bar.title} onClick={() => setSelected(cards[(laneIndex * 2 + barIndex) % cards.length])} aria-label={`Open ${bar.title}`}><span>{bar.title}</span><small>{bar.span}d</small>{bar.progress > 0 && <i style={{width:`${bar.progress}%`}}/>}</button>)}</div></div>)}
+            </div>
+          </div>
+          <footer className="timeline-legend"><span><i className="legend-dot active-dot"/> Active run</span><span><i className="legend-dot planned-dot"/> Planned</span><span><b>◆</b> Milestone</span><p>Drag the schedule horizontally on smaller screens</p></footer>
+        </section>
+      </div>}
+
       {view === "milestones" && <div className="content">
         <div className="page-title"><div><p>ROADMAP</p><h1>Milestones</h1><h2>Keep scope honest and the whole studio moving together.</h2></div><button className="secondary-button">＋ New milestone</button></div>
         <div className="timeline">
@@ -122,7 +148,7 @@ export default function Home() {
 
     {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>NEW QUEST</small><h2>Forge a card</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>Card title<input name="title" required autoFocus placeholder="What needs to happen?"/></label><label>Description<textarea name="description" placeholder="Add context, goals, or acceptance notes…"/></label><div className="form-row"><label>Discipline<select name="tag"><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option></select></label><label>Effort<select name="points"><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><label>Project<select name="project">{projects.map(p => <option key={p.name}>{p.name}</option>)}</select></label><footer><button type="button" onClick={() => setCreateOpen(false)}>Cancel</button><button className="create-button" type="submit">Create card</button></footer></form></section></div>}
 
-    {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2><p>{selected.description}</p><div className="detail-grid"><div><small>OWNER</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>DUE</small><b>◷ {selected.due}</b></div></div><label>Status<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option key={s}>{s}</option>)}</select></label><section className="production-timeline"><header><div><small>PRODUCTION TIMELINE</small><h3>Quest journey</h3></div><span>{productionStages.indexOf(selected.status) + 1} of 4</span></header><div className="timeline-steps">{productionStages.map((stage, index) => { const currentIndex = productionStages.indexOf(selected.status); const state = index < currentIndex ? "complete" : index === currentIndex ? "current" : "upcoming"; return <div className={`timeline-step ${state}`} key={stage}><span className="step-node">{index < currentIndex ? "✓" : index + 1}</span><div><b>{stage}</b><small>{state === "complete" ? (index === 0 ? "Card scoped" : index === 1 ? "Work completed" : "Approved") : state === "current" ? (stage === "Ready" ? "Ready to be picked up" : stage === "In progress" ? `${selected.owner} is working on this` : stage === "Review" ? "Waiting for team approval" : "Shipped with the milestone") : (stage === "In progress" ? "Next production handoff" : stage === "Review" ? "Team review" : "Ready to ship")}</small></div><time>{state === "complete" ? (index === 0 ? "Aug 14" : index === 1 ? "Aug 17" : "Today") : state === "current" ? "Now" : "—"}</time></div>})}</div></section><div className="checklist"><small>CHECKLIST · 2/3</small><p>✓ Verify keyboard controls</p><p>✓ Test with controller</p><p>○ Capture playtest notes</p></div></div></section></div>}
+    {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2><p>{selected.description}</p><div className="detail-grid"><div><small>OWNER</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>DUE</small><b>◷ {selected.due}</b></div></div><label>Status<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option key={s}>{s}</option>)}</select></label><div className="checklist"><small>CHECKLIST · 2/3</small><p>✓ Verify keyboard controls</p><p>✓ Test with controller</p><p>○ Capture playtest notes</p></div></div></section></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
