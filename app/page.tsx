@@ -28,6 +28,17 @@ type SupabaseCard = {
   questdeck_projects: { name: string };
 };
 
+type SupabaseSubTodo = { id: number; card_id: number; text: string; done: boolean; sort_order: number };
+
+async function syncQuestdeck(action: string, payload: Record<string, unknown>) {
+  const response = await fetch("/api/questdeck-sync", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  if (!response.ok) throw new Error("Supabase sync failed");
+}
+
 const initialCards: Card[] = [
   { id: 1, title: "Tune player movement", description: "Make traversal feel crisp and responsive before the next playtest.", tag: "GAMEPLAY", owner: "MK", points: 3, color: "violet", status: "In progress", project: "Project Nightfall", due: "Today" },
   { id: 2, title: "Forest ambience pass", description: "Layer environmental loops for the northern forest biome.", tag: "AUDIO", owner: "JL", points: 2, color: "mint", status: "Ready", project: "Project Nightfall", due: "Today" },
@@ -136,18 +147,26 @@ export default function Home() {
     const stored = window.localStorage.getItem("questdeck-cards");
     let localCards: Card[] = [];
     if (stored) { try { localCards = JSON.parse(stored); setCards(localCards); } catch {} }
+    const savedSubTodos = window.localStorage.getItem("questdeck-sub-todos");
+    let localSubTodos: Record<number, SubTodo[]> = {};
+    if (savedSubTodos) { try { localSubTodos = JSON.parse(savedSubTodos); setSubTodos(localSubTodos); } catch {} }
 
-    fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,color,status,due_label,questdeck_projects(name)&order=id.asc`, {
-      headers: { apikey: SUPABASE_PUBLISHABLE_KEY },
-    })
-      .then(response => {
-        if (!response.ok) throw new Error("Supabase request failed");
+    const headers = { apikey: SUPABASE_PUBLISHABLE_KEY };
+    Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,color,status,due_label,questdeck_projects(name)&order=id.asc`, { headers }).then(response => {
+        if (!response.ok) throw new Error("Supabase card request failed");
         return response.json() as Promise<SupabaseCard[]>;
-      })
-      .then(remoteCards => {
+      }),
+      fetch(`${SUPABASE_URL}/rest/v1/questdeck_subtasks?select=id,card_id,text,done,sort_order&order=card_id.asc,sort_order.asc`, { headers }).then(response => {
+        if (!response.ok) throw new Error("Supabase sub-task request failed");
+        return response.json() as Promise<SupabaseSubTodo[]>;
+      }),
+    ])
+      .then(([remoteCards, remoteSubTodos]) => {
         const localById = new Map(localCards.map(card => [card.id, card]));
         const remoteIds = new Set(remoteCards.map(card => card.id));
-        const mapped = remoteCards.map(card => localById.get(card.id) ?? ({
+        const migrationNeeded = window.localStorage.getItem("questdeck-supabase-migrated") !== "true" && (localCards.length > 0 || Object.keys(localSubTodos).length > 0);
+        const mapped = remoteCards.map(card => migrationNeeded ? (localById.get(card.id) ?? ({
           id: card.id,
           title: card.title,
           description: card.description,
@@ -158,8 +177,24 @@ export default function Home() {
           status: card.status,
           project: card.questdeck_projects.name,
           due: card.due_label,
+        } satisfies Card)) : ({
+          id: card.id, title: card.title, description: card.description, tag: card.tag, owner: card.owner_initials,
+          points: card.points, color: card.color, status: card.status, project: card.questdeck_projects.name, due: card.due_label,
         } satisfies Card));
-        setCards([...mapped, ...localCards.filter(card => !remoteIds.has(card.id))]);
+        setCards(migrationNeeded ? [...mapped, ...localCards.filter(card => !remoteIds.has(card.id))] : mapped);
+
+        const remoteTodos = remoteSubTodos.reduce<Record<number, SubTodo[]>>((all, todo) => {
+          (all[todo.card_id] ??= []).push({ id: todo.id, text: todo.text, done: todo.done });
+          return all;
+        }, {});
+        setSubTodos(migrationNeeded && Object.keys(localSubTodos).length ? localSubTodos : remoteTodos);
+
+        if (migrationNeeded) {
+          Promise.all(localCards.map(card => syncQuestdeck(remoteIds.has(card.id) ? "update_card" : "create_card", { card })))
+            .then(() => Promise.all(Object.entries(localSubTodos).map(([cardId, items]) => syncQuestdeck("replace_subtasks", { cardId: Number(cardId), items }))))
+            .then(() => window.localStorage.setItem("questdeck-supabase-migrated", "true"))
+            .catch(() => setToast(tr("Supabase sync needs another try", "Supabase 동기화를 다시 시도해야 합니다")));
+        }
         setDataSource("supabase");
       })
       .catch(() => setDataSource("local"));
@@ -173,14 +208,12 @@ export default function Home() {
     const savedNotifications = window.localStorage.getItem("questdeck-notifications");
     const savedProjects = window.localStorage.getItem("questdeck-projects");
     const savedLanguage = window.localStorage.getItem("questdeck-language");
-    const savedSubTodos = window.localStorage.getItem("questdeck-sub-todos");
     if (savedMembers) { try { setMembers(JSON.parse(savedMembers)); } catch {} }
     if (savedSettings) { try { const parsed = JSON.parse(savedSettings); setStudioName(parsed.studioName ?? "Starfall Studio"); setWeeklyDigest(parsed.weeklyDigest ?? true); } catch {} }
     if (savedWorkspaces) { try { const parsed = JSON.parse(savedWorkspaces); setWorkspaces(parsed.workspaces ?? initialWorkspaces); setActiveWorkspaceId(parsed.activeWorkspaceId ?? "starfall"); } catch {} }
     if (savedNotifications) { try { setNotifications(JSON.parse(savedNotifications)); } catch {} }
     if (savedProjects) { try { setProjects(JSON.parse(savedProjects)); } catch {} }
     if (savedLanguage === "ko" || savedLanguage === "en") setLanguage(savedLanguage);
-    if (savedSubTodos) { try { setSubTodos(JSON.parse(savedSubTodos)); } catch {} }
   }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-members", JSON.stringify(members)); }, [members]);
   useEffect(() => { window.localStorage.setItem("questdeck-workspaces", JSON.stringify({ workspaces, activeWorkspaceId })); }, [workspaces, activeWorkspaceId]);
@@ -204,11 +237,14 @@ export default function Home() {
       tag: String(data.get("tag")), owner: "JK", points: Number(data.get("points")), color: "violet", status: "Ready", project: String(data.get("project")), due: "New",
     };
     setCards(prev => [newCard, ...prev]); setCreateOpen(false); setToast("Card added to your deck"); setView("quests");
+    void syncQuestdeck("create_card", { card: newCard }).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function updateStatus(card: Card, status: Status) {
-    setCards(prev => prev.map(item => item.id === card.id ? { ...item, status } : item));
-    setSelected({ ...card, status }); setToast(`Moved to ${status}`);
+    const updated = { ...card, status };
+    setCards(prev => prev.map(item => item.id === card.id ? updated : item));
+    setSelected(updated); setToast(`Moved to ${status}`);
+    void syncQuestdeck("update_card", { card: updated }).catch(() => setToast(tr("Status saved locally; Supabase sync failed", "상태는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function inviteMember(event: FormEvent<HTMLFormElement>) {
@@ -283,17 +319,23 @@ export default function Home() {
     const data = new FormData(form);
     const text = String(data.get("subTodo")).trim();
     if (!text) return;
-    setSubTodos(current => ({ ...current, [selected.id]: [...(current[selected.id] ?? []), { id: Date.now(), text, done: false }] }));
+    const items = [...(subTodos[selected.id] ?? []), { id: Date.now(), text, done: false }];
+    setSubTodos(current => ({ ...current, [selected.id]: items }));
+    void syncQuestdeck("replace_subtasks", { cardId: selected.id, items }).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
     form.reset();
     setToast(tr("Sub-task added", "하위 작업을 추가했습니다"));
   }
 
   function toggleSubTodo(cardId: number, todoId: number) {
-    setSubTodos(current => ({ ...current, [cardId]: (current[cardId] ?? []).map(todo => todo.id === todoId ? { ...todo, done: !todo.done } : todo) }));
+    const items = (subTodos[cardId] ?? []).map(todo => todo.id === todoId ? { ...todo, done: !todo.done } : todo);
+    setSubTodos(current => ({ ...current, [cardId]: items }));
+    void syncQuestdeck("replace_subtasks", { cardId, items }).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function removeSubTodo(cardId: number, todoId: number) {
-    setSubTodos(current => ({ ...current, [cardId]: (current[cardId] ?? []).filter(todo => todo.id !== todoId) }));
+    const items = (subTodos[cardId] ?? []).filter(todo => todo.id !== todoId);
+    setSubTodos(current => ({ ...current, [cardId]: items }));
+    void syncQuestdeck("replace_subtasks", { cardId, items }).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function saveCardEdits(event: FormEvent<HTMLFormElement>) {
@@ -314,6 +356,7 @@ export default function Home() {
     setSelected(updated);
     setEditCardOpen(false);
     setToast(tr("Card updated", "카드를 수정했습니다"));
+    void syncQuestdeck("update_card", { card: updated }).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   const accountName = account?.fullName ?? account?.displayName ?? "Jamie Kim";
