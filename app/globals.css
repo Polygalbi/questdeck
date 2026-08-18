@@ -56,3 +56,21 @@
 
 @media(max-width:760px){.topbar{padding:0 12px}.topbar-inner{gap:7px}}
 @media(max-width:480px){.topbar-inner{gap:5px}}
+
+@media(max-width:760px){
+  .sidebar{padding:24px 18px 18px}
+  .sidebar .brand{padding-left:8px}
+  .sidebar .brand span:last-child{font-size:19px}
+  .sidebar .workspace{padding:9px;justify-content:flex-start}
+  .sidebar .workspace span:nth-child(2){min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sidebar .workspace small{font-size:9px}
+  .sidebar .workspace b{display:block;font-size:13px}
+  .sidebar .nav-label{font-size:10px}
+  .sidebar .nav-item,.sidebar .nav-item.active,.sidebar .nav-item:not(.active){font-size:13px}
+  .sidebar .nav-item span:first-child{font-size:16px}
+  .sidebar .nav-item i{font-size:11px}
+  .sidebar .profile{justify-content:flex-start}
+  .sidebar .profile div{display:block;min-width:0;font-size:12px}
+  .sidebar .profile div b,.sidebar .profile div small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sidebar .profile i{display:block;margin-left:auto}
+}
