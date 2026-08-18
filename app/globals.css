@@ -75,3 +75,5 @@
   .sidebar .profile div b,.sidebar .profile div small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .sidebar .profile i{display:block;margin-left:auto}
 }
+
+.brand-home{display:flex;align-items:center;gap:10px;border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer}

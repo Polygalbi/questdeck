@@ -622,7 +622,9 @@ export default function Home() {
   }
 
   const accountEmail = session?.user.email ?? account?.email ?? null;
-  const accountName = account?.fullName ?? account?.displayName ?? accountEmail?.split("@")[0] ?? "Guest";
+  const sessionProfile = session?.user.user_metadata as Record<string, unknown> | undefined;
+  const sessionName = [sessionProfile?.full_name, sessionProfile?.name, sessionProfile?.user_name, sessionProfile?.preferred_username].find(value => typeof value === "string" && value.trim()) as string | undefined;
+  const accountName = sessionName?.trim() ?? account?.fullName ?? account?.displayName ?? accountEmail?.split("@")[0] ?? "Guest";
   const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
   const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId && workspace.status === "Active") ?? workspaces.find(workspace => workspace.status === "Active") ?? initialWorkspaces[0];
   const unreadCount = notifications.filter(notification => !notification.read).length;
@@ -636,7 +638,7 @@ export default function Home() {
 
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
-      <div className="brand"><span className="brand-mark">Q</span><span>Questdeck</span><button className="sidebar-close" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation">×</button></div>
+      <div className="brand"><button className="brand-home" onClick={() => { setView("overview"); setMobileNavOpen(false); setWorkspaceOpen(false); }} aria-label={tr("Go to Questdeck overview", "Questdeck 개요로 이동")}><span className="brand-mark">Q</span><span>Questdeck</span></button><button className="sidebar-close" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation">×</button></div>
       <div className="workspace-wrap"><button className={`workspace ${workspaceOpen ? "open" : ""}`} onClick={() => setWorkspaceOpen(open => !open)}><span className="workspace-icon">{activeWorkspace.initials}</span><span><small>{tr("WORKSPACE", "워크스페이스")}</small>{activeWorkspace.name}</span><b>⌄</b></button>{workspaceOpen && <div className="workspace-menu"><header><span>{tr("Your workspaces", "내 워크스페이스")}</span><button onClick={() => setWorkspaceOpen(false)}>×</button></header>{workspaces.filter(workspace => workspace.status === "Active").map(workspace => <button className={`workspace-option ${workspace.id === activeWorkspaceId ? "active" : ""}`} key={workspace.id} onClick={() => switchWorkspace(workspace)}><span>{workspace.initials}</span><div><b>{workspace.name}</b><small>{workspace.members} {tr("members", "명")}</small></div>{workspace.id === activeWorkspaceId && <i>✓</i>}</button>)}<footer><button onClick={() => { setCreateWorkspaceOpen(true); setWorkspaceOpen(false); }}>＋ {tr("Create workspace", "워크스페이스 만들기")}</button><button onClick={() => { setView("management"); setWorkspaceOpen(false); }}>⚙ {tr("Manage workspaces", "워크스페이스 관리")}</button></footer></div>}</div>
       <nav>
         <p className="nav-label">{tr("PLAN", "계획")}</p>
@@ -673,7 +675,7 @@ export default function Home() {
       </div></header>
 
       {view === "overview" && <div className="content">
-        <div className="welcome"><div><p>{tr("MONDAY, AUGUST 18", "8월 18일 월요일")}</p><h1>{tr("Good morning, Jamie", "좋은 아침이에요, Jamie")} <span>✦</span></h1><h2>{tr("Here’s what’s moving in your world.", "오늘 스튜디오에서 진행 중인 작업이에요.")}</h2></div><div className="team"><span>MK</span><span>JL</span><span>AS</span><span>+4</span></div></div>
+        <div className="welcome"><div><p>{tr("MONDAY, AUGUST 18", "8월 18일 월요일")}</p><h1>{tr(`Good morning, ${accountName}`, `좋은 아침이에요, ${accountName}`)} <span>✦</span></h1><h2>{tr("Here’s what’s moving in your world.", "오늘 스튜디오에서 진행 중인 작업이에요.")}</h2></div><div className="team"><span>MK</span><span>JL</span><span>AS</span><span>+4</span></div></div>
         <div className="stats">
           <article><span className="stat-icon purple-bg">✓</span><div><small>{tr("COMPLETED THIS WEEK", "이번 주 완료")}</small><strong>{cards.filter(c => c.status === "Done").length + 16}</strong><p><b>↑ 24%</b> {tr("from last week", "지난주 대비")}</p></div></article>
           <article><span className="stat-icon coral-bg">◷</span><div><small>{tr("IN PROGRESS", "진행 중")}</small><strong>{cards.filter(c => c.status === "In progress").length + 10}</strong><p>{tr("Across 3 projects", "3개 프로젝트")}</p></div></article>
