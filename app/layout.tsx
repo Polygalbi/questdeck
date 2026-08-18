@@ -21,7 +21,11 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "Questdeck — Game Production, in Play",
     description: "A playful game production workspace for teams who ship.",
-    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
+    icons: {
+      icon: [{ url: "/favicon.png", type: "image/png", sizes: "512x512" }],
+      shortcut: "/favicon.png",
+      apple: [{ url: "/apple-touch-icon.png", type: "image/png", sizes: "180x180" }],
+    },
     openGraph: { title: "Questdeck — Game Production, in Play", description: "A playful game production workspace for teams who ship.", images: [image] },
     twitter: { card: "summary_large_image", title: "Questdeck — Game Production, in Play", description: "A playful game production workspace for teams who ship.", images: [image] },
   };
