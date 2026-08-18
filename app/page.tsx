@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { createClient, type Session } from "@supabase/supabase-js";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
 type View = "overview" | "quests" | "timeline" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
@@ -14,6 +15,7 @@ type SubTodo = { id: number; text: string; done: boolean };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
 type SupabaseCard = {
   id: number;
@@ -30,10 +32,10 @@ type SupabaseCard = {
 
 type SupabaseSubTodo = { id: number; card_id: number; text: string; done: boolean; sort_order: number };
 
-async function syncQuestdeck(action: string, payload: Record<string, unknown>) {
+async function syncQuestdeck(action: string, payload: Record<string, unknown>, accessToken: string) {
   const response = await fetch("/api/questdeck-sync", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ action, ...payload }),
   });
   if (!response.ok) throw new Error("Supabase sync failed");
@@ -142,15 +144,13 @@ export default function Home() {
   const [language, setLanguage] = useState<"en" | "ko">("en");
   const [subTodos, setSubTodos] = useState<Record<number, SubTodo[]>>(initialSubTodos);
   const [editCardOpen, setEditCardOpen] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("questdeck-cards");
-    let localCards: Card[] = [];
-    if (stored) { try { localCards = JSON.parse(stored); setCards(localCards); } catch {} }
-    const savedSubTodos = window.localStorage.getItem("questdeck-sub-todos");
-    let localSubTodos: Record<number, SubTodo[]> = {};
-    if (savedSubTodos) { try { localSubTodos = JSON.parse(savedSubTodos); setSubTodos(localSubTodos); } catch {} }
-
     const headers = { apikey: SUPABASE_PUBLISHABLE_KEY };
     Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,color,status,due_label,questdeck_projects(name)&order=id.asc`, { headers }).then(response => {
@@ -163,41 +163,25 @@ export default function Home() {
       }),
     ])
       .then(([remoteCards, remoteSubTodos]) => {
-        const localById = new Map(localCards.map(card => [card.id, card]));
-        const remoteIds = new Set(remoteCards.map(card => card.id));
-        const migrationNeeded = window.localStorage.getItem("questdeck-supabase-migrated") !== "true" && (localCards.length > 0 || Object.keys(localSubTodos).length > 0);
-        const mapped = remoteCards.map(card => migrationNeeded ? (localById.get(card.id) ?? ({
-          id: card.id,
-          title: card.title,
-          description: card.description,
-          tag: card.tag,
-          owner: card.owner_initials,
-          points: card.points,
-          color: card.color,
-          status: card.status,
-          project: card.questdeck_projects.name,
-          due: card.due_label,
-        } satisfies Card)) : ({
+        const mapped = remoteCards.map(card => ({
           id: card.id, title: card.title, description: card.description, tag: card.tag, owner: card.owner_initials,
           points: card.points, color: card.color, status: card.status, project: card.questdeck_projects.name, due: card.due_label,
         } satisfies Card));
-        setCards(migrationNeeded ? [...mapped, ...localCards.filter(card => !remoteIds.has(card.id))] : mapped);
+        setCards(mapped);
 
         const remoteTodos = remoteSubTodos.reduce<Record<number, SubTodo[]>>((all, todo) => {
           (all[todo.card_id] ??= []).push({ id: todo.id, text: todo.text, done: todo.done });
           return all;
         }, {});
-        setSubTodos(migrationNeeded && Object.keys(localSubTodos).length ? localSubTodos : remoteTodos);
-
-        if (migrationNeeded) {
-          Promise.all(localCards.map(card => syncQuestdeck(remoteIds.has(card.id) ? "update_card" : "create_card", { card })))
-            .then(() => Promise.all(Object.entries(localSubTodos).map(([cardId, items]) => syncQuestdeck("replace_subtasks", { cardId: Number(cardId), items }))))
-            .then(() => window.localStorage.setItem("questdeck-supabase-migrated", "true"))
-            .catch(() => setToast(tr("Supabase sync needs another try", "Supabase 동기화를 다시 시도해야 합니다")));
-        }
+        setSubTodos(remoteTodos);
         setDataSource("supabase");
       })
       .catch(() => setDataSource("local"));
+  }, []);
+  useEffect(() => {
+    void supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+    return () => subscription.unsubscribe();
   }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-cards", JSON.stringify(cards)); }, [cards]);
   useEffect(() => {
@@ -229,22 +213,57 @@ export default function Home() {
     return matchesQuery && (project === "All projects" || card.project === project);
   }), [cards, query, project]);
 
+  function requireSession() {
+    if (session?.access_token) return session.access_token;
+    setAuthOpen(true);
+    setAuthMessage(tr("Sign in to save changes to the shared workspace.", "공유 워크스페이스에 변경 사항을 저장하려면 로그인하세요."));
+    return null;
+  }
+
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const email = String(data.get("email")).trim();
+    const password = String(data.get("password"));
+    setAuthBusy(true);
+    setAuthMessage("");
+    const result = authMode === "signup"
+      ? await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } })
+      : await supabase.auth.signInWithPassword({ email, password });
+    setAuthBusy(false);
+    if (result.error) {
+      setAuthMessage(result.error.message);
+      return;
+    }
+    if (authMode === "signup" && !result.data.session) {
+      setAuthMessage(tr("Check your email to confirm your account, then sign in.", "이메일에서 계정을 확인한 후 로그인하세요."));
+      setAuthMode("signin");
+      return;
+    }
+    setAuthOpen(false);
+    setToast(tr("Signed in — changes now sync to Supabase", "로그인했습니다 — 변경 사항이 Supabase에 동기화됩니다"));
+  }
+
   function createCard(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const data = new FormData(event.currentTarget);
     const newCard: Card = {
       id: Date.now(), title: String(data.get("title")), description: String(data.get("description") || "A newly forged quest, ready for the team."),
       tag: String(data.get("tag")), owner: "JK", points: Number(data.get("points")), color: "violet", status: "Ready", project: String(data.get("project")), due: "New",
     };
     setCards(prev => [newCard, ...prev]); setCreateOpen(false); setToast("Card added to your deck"); setView("quests");
-    void syncQuestdeck("create_card", { card: newCard }).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+    void syncQuestdeck("create_card", { card: newCard }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function updateStatus(card: Card, status: Status) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const updated = { ...card, status };
     setCards(prev => prev.map(item => item.id === card.id ? updated : item));
     setSelected(updated); setToast(`Moved to ${status}`);
-    void syncQuestdeck("update_card", { card: updated }).catch(() => setToast(tr("Status saved locally; Supabase sync failed", "상태는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+    void syncQuestdeck("update_card", { card: updated }, accessToken).catch(() => setToast(tr("Status saved locally; Supabase sync failed", "상태는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function inviteMember(event: FormEvent<HTMLFormElement>) {
@@ -315,32 +334,40 @@ export default function Home() {
   function addSubTodo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const form = event.currentTarget;
     const data = new FormData(form);
     const text = String(data.get("subTodo")).trim();
     if (!text) return;
     const items = [...(subTodos[selected.id] ?? []), { id: Date.now(), text, done: false }];
     setSubTodos(current => ({ ...current, [selected.id]: items }));
-    void syncQuestdeck("replace_subtasks", { cardId: selected.id, items }).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+    void syncQuestdeck("replace_subtasks", { cardId: selected.id, items }, accessToken).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
     form.reset();
     setToast(tr("Sub-task added", "하위 작업을 추가했습니다"));
   }
 
   function toggleSubTodo(cardId: number, todoId: number) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const items = (subTodos[cardId] ?? []).map(todo => todo.id === todoId ? { ...todo, done: !todo.done } : todo);
     setSubTodos(current => ({ ...current, [cardId]: items }));
-    void syncQuestdeck("replace_subtasks", { cardId, items }).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+    void syncQuestdeck("replace_subtasks", { cardId, items }, accessToken).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function removeSubTodo(cardId: number, todoId: number) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const items = (subTodos[cardId] ?? []).filter(todo => todo.id !== todoId);
     setSubTodos(current => ({ ...current, [cardId]: items }));
-    void syncQuestdeck("replace_subtasks", { cardId, items }).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+    void syncQuestdeck("replace_subtasks", { cardId, items }, accessToken).catch(() => setToast(tr("Sub-task saved locally; Supabase sync failed", "하위 작업은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
   function saveCardEdits(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
     const data = new FormData(event.currentTarget);
     const updated: Card = {
       ...selected,
@@ -356,10 +383,11 @@ export default function Home() {
     setSelected(updated);
     setEditCardOpen(false);
     setToast(tr("Card updated", "카드를 수정했습니다"));
-    void syncQuestdeck("update_card", { card: updated }).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+    void syncQuestdeck("update_card", { card: updated }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
-  const accountName = account?.fullName ?? account?.displayName ?? "Jamie Kim";
+  const accountEmail = session?.user.email ?? account?.email ?? null;
+  const accountName = account?.fullName ?? account?.displayName ?? accountEmail?.split("@")[0] ?? "Guest";
   const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
   const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId) ?? workspaces[0];
   const unreadCount = notifications.filter(notification => !notification.read).length;
@@ -397,9 +425,10 @@ export default function Home() {
         <button className="mobile-menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation"><span /><span /><span /></button>
         <label className="search">⌕ <input value={query} onChange={e => setQuery(e.target.value)} placeholder={tr("Search cards, decks, people…", "카드, 덱, 멤버 검색…")} aria-label={tr("Search cards", "카드 검색")}/><kbd>⌘ K</kbd></label>
         <span className={`data-source ${dataSource}`}><i />{dataSource === "supabase" ? tr("Supabase live", "Supabase 연결됨") : dataSource === "local" ? tr("Local mode", "로컬 모드") : tr("Connecting", "연결 중")}</span>
+        <button className={`auth-chip ${session ? "signed-in" : ""}`} onClick={() => session ? setView("account") : setAuthOpen(true)}>{session ? accountEmail : tr("Sign in", "로그인")}</button>
         <select className="language-select" value={language} onChange={event => setLanguage(event.target.value as "en" | "ko")} aria-label={tr("Language", "언어")}><option value="en">EN</option><option value="ko">한국어</option></select>
         <button className={`icon-button ${view === "activity" ? "active" : ""}`} aria-label="Activity" onClick={() => setView("activity")}>◌</button><button className={`icon-button ${notificationOpen ? "active" : ""}`} aria-label={`${unreadCount} unread notifications`} onClick={() => setNotificationOpen(open => !open)}>♧{unreadCount > 0 && <em>{unreadCount}</em>}</button>
-        <button className="create-button top-create" onClick={() => setCreateOpen(true)}><span>＋</span><b>{tr("Create card", "카드 만들기")}</b></button>
+        <button className="create-button top-create" onClick={() => session ? setCreateOpen(true) : setAuthOpen(true)}><span>＋</span><b>{tr("Create card", "카드 만들기")}</b></button>
         {notificationOpen && <section className="notification-panel"><header><div><small>{tr("INBOX", "받은 알림")}</small><h3>{tr("Notifications", "알림")}</h3></div><button onClick={() => setNotifications(current => current.map(item => ({...item, read:true})))}>{tr("Mark all read", "모두 읽음")}</button></header><div className="notification-tabs"><button className="active">{tr("All", "전체")}</button><button>{tr("Mentions", "멘션")}</button><button>{tr("Assigned", "담당")}</button></div><div className="notification-list">{notifications.map(item => <button className={`notification-item ${item.read ? "read" : ""}`} key={item.id} onClick={() => openNotification(item)}><span className={`notification-avatar ${item.tone}`}>{item.icon}</span><div><b>{item.title}</b><p>{item.detail}</p><small>{item.time} {tr("ago", "전")}</small></div>{!item.read && <i />}</button>)}</div><footer><button onClick={() => { setNotificationOpen(false); setView("account"); }}>{tr("Notification settings", "알림 설정")} →</button></footer></section>}
       </header>
 
@@ -464,8 +493,8 @@ export default function Home() {
       {view === "roles" && <div className="content roles-content"><div className="page-title"><div><p>{tr("PERMISSIONS", "권한")}</p><h1>{tr("Roles & access", "역할 및 권한")}</h1><h2>{tr("Choose what each teammate can see, change, and manage.", "각 팀원이 보고 변경하고 관리할 수 있는 항목을 설정하세요.")}</h2></div><button className="secondary-button" onClick={() => { setView("management"); setInviteOpen(true); }}>＋ {tr("Assign a role", "역할 지정")}</button></div><div className="role-cards">{roleDefinitions.map(role => <article className="role-card" key={role.name}><span className={`role-icon ${role.color}`}>{role.name[0]}</span><div><small>{role.count} {tr(role.count === 1 ? "PERSON" : "PEOPLE", "명")}</small><h3>{role.name}</h3><p>{role.description}</p></div><button onClick={() => setToast(`${role.name} permissions selected`)}>{tr("View members", "멤버 보기")} →</button></article>)}</div><section className="management-card permission-matrix"><header><div><small>{tr("ACCESS MATRIX", "권한 매트릭스")}</small><h3>{tr("Role permissions", "역할 권한")}</h3></div><span>{tr("Changes apply across", "적용 대상")} {activeWorkspace.name}</span></header><div className="matrix-row matrix-head"><b>{tr("Capability", "기능")}</b>{roleDefinitions.map(role => <b key={role.name}>{role.name}</b>)}</div>{[["View projects","프로젝트 보기"],["Create & edit cards","카드 만들기 및 편집"],["Manage members","멤버 관리"],["Workspace settings","워크스페이스 설정"],["Billing & security","결제 및 보안"]].map(([permission,korean],index) => <div className="matrix-row" key={permission}><span>{tr(permission,korean)}</span>{roleDefinitions.map(role => <i className={role.permissions[index] ? "allowed" : "denied"} key={role.name}>{role.permissions[index] ? "✓" : "—"}</i>)}</div>)}</section></div>}
 
       {view === "account" && <div className="content account-content">
-        <div className="page-title"><div><p>{tr("PERSONAL SETTINGS", "개인 설정")}</p><h1>{tr("My account", "내 계정")}</h1><h2>{tr("Your identity, preferences, and active access.", "계정 정보, 환경설정, 접근 권한을 관리하세요.")}</h2></div><a className="secondary-button signout-link" href="/signout-with-chatgpt?return_to=%2F">{tr("Sign out", "로그아웃")}</a></div>
-        <div className="account-grid"><section className="management-card account-hero"><div className="account-avatar">{accountInitials}</div><div><small>SIGNED IN WITH CHATGPT</small><h2>{accountName}</h2><p>{account?.email ?? "Secure workspace account"}</p><span className="verified-badge">✓ Verified identity</span></div></section><section className="management-card account-details"><small>ACCOUNT DETAILS</small><div className="detail-line"><span>Email</span><b>{account?.email ?? "Loading account…"}</b></div><div className="detail-line"><span>Workspace role</span><b>Owner</b></div><div className="detail-line"><span>Primary discipline</span><b>Production</b></div><div className="detail-line"><span>Access</span><b>All projects</b></div></section><section className="management-card account-preferences"><small>NOTIFICATIONS</small><label className="toggle-row"><span><b>Assigned card updates</b><small>Changes to cards you own</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Milestone reminders</b><small>Three days before deadlines</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Studio activity</b><small>Daily collaboration summary</small></span><input type="checkbox" /></label></section><section className="management-card sessions-card"><small>SECURITY</small><h3>Active session</h3><p>Signed in through ChatGPT · Current browser</p><span className="healthy-pill">Protected</span></section></div>
+        <div className="page-title"><div><p>{tr("PERSONAL SETTINGS", "개인 설정")}</p><h1>{tr("My account", "내 계정")}</h1><h2>{tr("Your identity, preferences, and active access.", "계정 정보, 환경설정, 접근 권한을 관리하세요.")}</h2></div><button className="secondary-button signout-link" onClick={() => session ? void supabase.auth.signOut() : setAuthOpen(true)}>{session ? tr("Sign out", "로그아웃") : tr("Sign in", "로그인")}</button></div>
+        <div className="account-grid"><section className="management-card account-hero"><div className="account-avatar">{accountInitials}</div><div><small>{session ? tr("SIGNED IN WITH SUPABASE", "SUPABASE로 로그인됨") : tr("SIGN IN TO EDIT", "수정하려면 로그인하세요")}</small><h2>{accountName}</h2><p>{accountEmail ?? tr("Secure workspace account", "안전한 워크스페이스 계정")}</p><span className="verified-badge">{session ? "✓ " + tr("Verified identity", "인증된 계정") : tr("Read-only access", "읽기 전용")}</span></div></section><section className="management-card account-details"><small>{tr("ACCOUNT DETAILS", "계정 정보")}</small><div className="detail-line"><span>{tr("Email", "이메일")}</span><b>{accountEmail ?? tr("Not signed in", "로그인하지 않음")}</b></div><div className="detail-line"><span>{tr("Workspace role", "워크스페이스 역할")}</span><b>Owner</b></div><div className="detail-line"><span>{tr("Primary discipline", "주요 분야")}</span><b>Production</b></div><div className="detail-line"><span>{tr("Access", "접근 권한")}</span><b>{session ? tr("All projects", "모든 프로젝트") : tr("View only", "보기 전용")}</b></div></section><section className="management-card account-preferences"><small>NOTIFICATIONS</small><label className="toggle-row"><span><b>Assigned card updates</b><small>Changes to cards you own</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Milestone reminders</b><small>Three days before deadlines</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Studio activity</b><small>Daily collaboration summary</small></span><input type="checkbox" /></label></section><section className="management-card sessions-card"><small>SECURITY</small><h3>{session ? tr("Active session", "활성 세션") : tr("No active session", "활성 세션 없음")}</h3><p>{session ? tr("Signed in through Supabase · Current browser", "Supabase로 로그인 · 현재 브라우저") : tr("Sign in to create and edit shared cards.", "공유 카드를 만들고 수정하려면 로그인하세요.")}</p><span className="healthy-pill">{session ? tr("Protected", "보호됨") : tr("Read only", "읽기 전용")}</span></section></div>
       </div>}
     </section>
 
@@ -480,6 +509,7 @@ export default function Home() {
     {selected && !editCardOpen && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><div className="detail-title-row"><div><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2></div><button className="edit-card-button" onClick={() => setEditCardOpen(true)}>✎ {tr("Edit card", "카드 수정")}</button></div><p>{selected.description}</p><div className="detail-grid"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>{tr("DUE", "마감")}</small><b>◷ {selected.due}</b></div></div><label>{tr("Status", "상태")}<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option value={s} key={s}>{statusLabel(s)}</option>)}</select></label><div className="subtodo-section"><header><div><small>{tr("SUB-TASKS", "하위 작업")}</small><b>{completedSubTodos}/{selectedTodos.length}</b></div>{selectedTodos.length > 0 && <div className="subtodo-progress"><span style={{width:`${Math.round((completedSubTodos / selectedTodos.length) * 100)}%`}} /></div>}</header><div className="subtodo-list">{selectedTodos.map(todo => <div className={`subtodo-row ${todo.done ? "done" : ""}`} key={todo.id}><button className="subtodo-check" onClick={() => toggleSubTodo(selected.id, todo.id)} aria-label={todo.done ? tr("Mark incomplete", "미완료로 표시") : tr("Mark complete", "완료로 표시")}>{todo.done ? "✓" : ""}</button><span>{todo.text}</span><button className="subtodo-remove" onClick={() => removeSubTodo(selected.id, todo.id)} aria-label={tr("Remove sub-task", "하위 작업 삭제")}>×</button></div>)}{selectedTodos.length === 0 && <p className="subtodo-empty">{tr("No sub-tasks yet. Break this card into smaller steps.", "아직 하위 작업이 없습니다. 카드를 더 작은 단계로 나눠보세요.")}</p>}</div><form className="subtodo-form" onSubmit={addSubTodo}><input name="subTodo" placeholder={tr("Add a sub-task…", "하위 작업 추가…")} aria-label={tr("New sub-task", "새 하위 작업")} /><button type="submit">＋ {tr("Add", "추가")}</button></form></div></div></section></div>}
 
     {selected && editCardOpen && <div className="modal-backdrop" onMouseDown={() => setEditCardOpen(false)}><section className="modal create-modal edit-card-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit card", "카드 수정")}><header><div><small>{tr("CARD DETAILS", "카드 정보")}</small><h2>{tr("Edit card", "카드 수정")}</h2></div><button onClick={() => setEditCardOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveCardEdits}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus defaultValue={selected.title} /></label><label>{tr("Description", "설명")}<textarea name="description" defaultValue={selected.description} /></label><div className="form-row"><label>{tr("Discipline", "분야")}<select name="tag" defaultValue={selected.tag}><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option><option>RELEASE</option><option>STUDIO</option></select></label><label>{tr("Effort", "작업량")}<select name="points" defaultValue={selected.points}><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={selected.project}>{projects.map(projectItem => <option key={projectItem.id}>{projectItem.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={selected.status}>{productionStages.map(status => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label></div><label>{tr("Due date", "마감일")}<input name="due" defaultValue={selected.due} placeholder={tr("Today, Aug 24, or No date", "오늘, 8월 24일 또는 날짜 없음")} /></label><footer><button type="button" onClick={() => setEditCardOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save changes", "변경 사항 저장")}</button></footer></form></section></div>}
+    {authOpen && <div className="modal-backdrop" onMouseDown={() => setAuthOpen(false)}><section className="modal create-modal auth-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Questdeck account", "Questdeck 계정")}><header><div><small>QUESTDECK ACCOUNT</small><h2>{authMode === "signin" ? tr("Welcome back", "다시 오신 것을 환영합니다") : tr("Create your account", "계정 만들기")}</h2></div><button onClick={() => setAuthOpen(false)} aria-label="Close">×</button></header><form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<footer className="auth-footer"><button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Create account", "계정 만들기") : tr("I already have an account", "이미 계정이 있어요")}</button><button className="create-button" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Sign up", "가입하기")}</button></footer></form></section></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }

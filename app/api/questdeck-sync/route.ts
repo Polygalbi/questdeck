@@ -1,8 +1,16 @@
 export const dynamic = "force-dynamic";
 
+const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
+
 export async function POST(request: Request) {
-  const userId = request.headers.get("oai-authenticated-user-id");
-  if (!userId) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const authorization = request.headers.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) return Response.json({ error: "Sign in required" }, { status: 401 });
+
+  const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization },
+  });
+  if (!userResponse.ok) return Response.json({ error: "Session expired" }, { status: 401 });
 
   const syncUrl = process.env.QUESTDECK_SYNC_URL;
   const syncSecret = process.env.QUESTDECK_SYNC_SECRET;
