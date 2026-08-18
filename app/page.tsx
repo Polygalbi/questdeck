@@ -3,12 +3,13 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "timeline" | "milestones" | "management" | "roles" | "account";
+type View = "overview" | "quests" | "timeline" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; color: string; status: Status; project: string; due: string };
 type Account = { displayName: string; email: string; fullName: string | null };
 type Member = { id: number; name: string; email: string; initials: string; role: "Owner" | "Admin" | "Member" | "Guest"; discipline: string; status: "Active" | "Invited" };
 type Workspace = { id: string; name: string; initials: string; members: number; plan: string };
 type Notification = { id: number; title: string; detail: string; time: string; icon: string; tone: string; read: boolean; destination: View };
+type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -37,10 +38,10 @@ const initialCards: Card[] = [
   { id: 8, title: "New starter checklist", description: "Document local setup and first-week studio rituals.", tag: "STUDIO", owner: "AS", points: 1, color: "mint", status: "Done", project: "Studio Ops", due: "Aug 15" },
 ];
 
-const projects = [
-  { name: "Project Nightfall", count: 24, color: "purple" },
-  { name: "Marketing", count: 8, color: "yellow" },
-  { name: "Studio Ops", count: 4, color: "blue" },
+const initialProjects: Project[] = [
+  { id: "nightfall", name: "Project Nightfall", count: 24, color: "purple", owner: "Mina Kwon", status: "Active", progress: 68, updated: "12 minutes ago" },
+  { id: "marketing", name: "Marketing", count: 8, color: "yellow", owner: "Jamie Kim", status: "Active", progress: 44, updated: "2 hours ago" },
+  { id: "studio-ops", name: "Studio Ops", count: 4, color: "blue", owner: "Alex Santos", status: "On hold", progress: 25, updated: "Yesterday" },
 ];
 
 const productionStages: Status[] = ["Ready", "In progress", "Review", "Done"];
@@ -70,6 +71,15 @@ const roleDefinitions = [
   { name: "Admin", description: "Manage members, projects, and production settings.", color: "coral", count: 1, permissions: [true, true, true, true, false] },
   { name: "Member", description: "Create and update cards across assigned projects.", color: "mint", count: 3, permissions: [true, true, false, false, false] },
   { name: "Guest", description: "Review and comment on specifically shared work.", color: "blue-card", count: 0, permissions: [true, false, false, false, false] },
+];
+
+const activityEvents = [
+  { id: 1, person: "Alex Santos", initials: "AS", action: "moved", target: "Boss arena concept", detail: "In progress → Review", project: "Project Nightfall", type: "Cards", time: "18 minutes ago", tone: "coral" },
+  { id: 2, person: "Jules Lee", initials: "JL", action: "completed", target: "Cave reverb zones", detail: "Card completed", project: "Project Nightfall", type: "Cards", time: "42 minutes ago", tone: "mint" },
+  { id: 3, person: "Mina Kwon", initials: "MK", action: "commented on", target: "Tune player movement", detail: "“The latest build feels much sharper.”", project: "Project Nightfall", type: "Comments", time: "1 hour ago", tone: "violet" },
+  { id: 4, person: "Jamie Kim", initials: "JK", action: "updated milestone", target: "Festival demo", detail: "Progress increased from 62% to 68%", project: "Project Nightfall", type: "Milestones", time: "3 hours ago", tone: "amber-card" },
+  { id: 5, person: "Noah Kim", initials: "NK", action: "created", target: "Controller remapping", detail: "Assigned to Engineering · 5 points", project: "Project Nightfall", type: "Cards", time: "Yesterday", tone: "blue-card" },
+  { id: 6, person: "Jamie Kim", initials: "JK", action: "invited", target: "Robin Park", detail: "Member access · Marketing", project: "Marketing", type: "Team", time: "Yesterday", tone: "violet" },
 ];
 
 const timelineDays = ["Mon 17", "Tue 18", "Wed 19", "Thu 20", "Fri 21", "Sat 22", "Sun 23", "Mon 24", "Tue 25", "Wed 26", "Thu 27", "Fri 28", "Sat 29", "Sun 30"];
@@ -107,6 +117,10 @@ export default function Home() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("starfall");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+  const [projects, setProjects] = useState<Project[]>(initialProjects);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [projectStatusFilter, setProjectStatusFilter] = useState("All");
+  const [activityFilter, setActivityFilter] = useState("All activity");
 
   useEffect(() => {
     const stored = window.localStorage.getItem("questdeck-cards");
@@ -147,14 +161,17 @@ export default function Home() {
     const savedSettings = window.localStorage.getItem("questdeck-workspace-settings");
     const savedWorkspaces = window.localStorage.getItem("questdeck-workspaces");
     const savedNotifications = window.localStorage.getItem("questdeck-notifications");
+    const savedProjects = window.localStorage.getItem("questdeck-projects");
     if (savedMembers) { try { setMembers(JSON.parse(savedMembers)); } catch {} }
     if (savedSettings) { try { const parsed = JSON.parse(savedSettings); setStudioName(parsed.studioName ?? "Starfall Studio"); setWeeklyDigest(parsed.weeklyDigest ?? true); } catch {} }
     if (savedWorkspaces) { try { const parsed = JSON.parse(savedWorkspaces); setWorkspaces(parsed.workspaces ?? initialWorkspaces); setActiveWorkspaceId(parsed.activeWorkspaceId ?? "starfall"); } catch {} }
     if (savedNotifications) { try { setNotifications(JSON.parse(savedNotifications)); } catch {} }
+    if (savedProjects) { try { setProjects(JSON.parse(savedProjects)); } catch {} }
   }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-members", JSON.stringify(members)); }, [members]);
   useEffect(() => { window.localStorage.setItem("questdeck-workspaces", JSON.stringify({ workspaces, activeWorkspaceId })); }, [workspaces, activeWorkspaceId]);
   useEffect(() => { window.localStorage.setItem("questdeck-notifications", JSON.stringify(notifications)); }, [notifications]);
+  useEffect(() => { window.localStorage.setItem("questdeck-projects", JSON.stringify(projects)); }, [projects]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => window.clearTimeout(timer); }, [toast]);
 
   const filtered = useMemo(() => cards.filter(card => {
@@ -225,10 +242,29 @@ export default function Home() {
     setToast(`${member.name} is now ${role}`);
   }
 
+  function createProject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name"));
+    const colors = ["purple", "yellow", "blue"];
+    const newProject: Project = { id: String(Date.now()), name, count: 0, color: colors[projects.length % colors.length], owner: String(data.get("owner")), status: "Active", progress: 0, updated: "Just now" };
+    setProjects(current => [...current, newProject]);
+    setCreateProjectOpen(false);
+    setToast(`${name} project created`);
+  }
+
+  function toggleProjectArchive(item: Project) {
+    const status = item.status === "Archived" ? "Active" : "Archived";
+    setProjects(current => current.map(projectItem => projectItem.id === item.id ? { ...projectItem, status, updated: "Just now" } : projectItem));
+    setToast(`${item.name} ${status === "Archived" ? "archived" : "restored"}`);
+  }
+
   const accountName = account?.fullName ?? account?.displayName ?? "Jamie Kim";
   const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
   const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId) ?? workspaces[0];
   const unreadCount = notifications.filter(notification => !notification.read).length;
+  const visibleProjects = projects.filter(item => projectStatusFilter === "All" || item.status === projectStatusFilter);
+  const visibleActivity = activityEvents.filter(item => activityFilter === "All activity" || item.type === activityFilter);
 
   return <main className="app-shell">
     <aside className="sidebar">
@@ -242,10 +278,11 @@ export default function Home() {
         <button className={`nav-item ${view === "milestones" ? "active" : ""}`} onClick={() => setView("milestones")}><span>◎</span> Milestones</button>
         <p className="nav-label">MANAGE</p>
         <button className={`nav-item ${view === "management" ? "active" : ""}`} onClick={() => setView("management")}><span>⚙</span> Workspace</button>
+        <button className={`nav-item ${view === "projects-management" ? "active" : ""}`} onClick={() => setView("projects-management")}><span>▦</span> Projects</button>
         <button className={`nav-item ${view === "roles" ? "active" : ""}`} onClick={() => setView("roles")}><span>♙</span> Roles & access</button>
         <button className={`nav-item ${view === "account" ? "active" : ""}`} onClick={() => setView("account")}><span>◉</span> My account</button>
         <p className="nav-label">PROJECTS</p>
-        {projects.map(item => <button className="nav-item" key={item.name} onClick={() => { setProject(item.name); setView("quests"); }}><span className={`dot ${item.color}`} /> {item.name}<i>{item.count}</i></button>)}
+        {projects.filter(item => item.status !== "Archived").map(item => <button className="nav-item" key={item.id} onClick={() => { setProject(item.name); setView("quests"); }}><span className={`dot ${item.color}`} /> {item.name}<i>{item.count}</i></button>)}
       </nav>
       <div className="sidebar-bottom"><button className="nav-item"><span>?</span> Help & shortcuts</button><button className="profile profile-button" onClick={() => setView("account")}><span>{accountInitials}</span><div><b>{accountName}</b><small>Producer · Owner</small></div><i>›</i></button></div>
     </aside>
@@ -254,7 +291,7 @@ export default function Home() {
       <header className="topbar">
         <label className="search">⌕ <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search cards, decks, people…" aria-label="Search cards"/><kbd>⌘ K</kbd></label>
         <span className={`data-source ${dataSource}`}><i />{dataSource === "supabase" ? "Supabase live" : dataSource === "local" ? "Local mode" : "Connecting"}</span>
-        <button className="icon-button" aria-label="Activity" onClick={() => setView("overview")}>◌</button><button className={`icon-button ${notificationOpen ? "active" : ""}`} aria-label={`${unreadCount} unread notifications`} onClick={() => setNotificationOpen(open => !open)}>♧{unreadCount > 0 && <em>{unreadCount}</em>}</button>
+        <button className={`icon-button ${view === "activity" ? "active" : ""}`} aria-label="Activity" onClick={() => setView("activity")}>◌</button><button className={`icon-button ${notificationOpen ? "active" : ""}`} aria-label={`${unreadCount} unread notifications`} onClick={() => setNotificationOpen(open => !open)}>♧{unreadCount > 0 && <em>{unreadCount}</em>}</button>
         <button className="create-button" onClick={() => setCreateOpen(true)}>＋ Create card</button>
         {notificationOpen && <section className="notification-panel"><header><div><small>INBOX</small><h3>Notifications</h3></div><button onClick={() => setNotifications(current => current.map(item => ({...item, read:true})))}>Mark all read</button></header><div className="notification-tabs"><button className="active">All</button><button>Mentions</button><button>Assigned</button></div><div className="notification-list">{notifications.map(item => <button className={`notification-item ${item.read ? "read" : ""}`} key={item.id} onClick={() => openNotification(item)}><span className={`notification-avatar ${item.tone}`}>{item.icon}</span><div><b>{item.title}</b><p>{item.detail}</p><small>{item.time} ago</small></div>{!item.read && <i />}</button>)}</div><footer><button onClick={() => { setNotificationOpen(false); setView("account"); }}>Notification settings →</button></footer></section>}
       </header>
@@ -270,9 +307,11 @@ export default function Home() {
         <div className="card-grid hand-grid">{filtered.filter(card => card.status !== "Done").slice(0, 3).map(card => <QuestCard card={card} onOpen={setSelected} key={card.id}/>)}</div>
         <div className="overview-bottom">
           <section className="milestone-preview"><div className="mini-title"><div><small>NEXT MILESTONE</small><h3>Festival demo</h3></div><b>12 days</b></div><div className="progress-track"><span style={{width:"68%"}}/></div><p><b>34 of 50 cards</b> completed <span>68%</span></p><div className="milestone-tags"><i>Core loop ✓</i><i>Forest biome</i><i>Demo polish</i></div></section>
-          <section className="activity"><div className="mini-title"><div><small>LIVE PULSE</small><h3>Studio activity</h3></div><button>•••</button></div><ul><li><span className="pulse-avatar lilac">AS</span><p><b>Alex</b> moved <strong>Boss arena concept</strong> to Review<small>18 minutes ago</small></p></li><li><span className="pulse-avatar aqua">JL</span><p><b>Jules</b> completed <strong>Cave reverb zones</strong><small>42 minutes ago</small></p></li><li><span className="pulse-avatar gold">MK</span><p><b>Mina</b> added 2 comments<small>1 hour ago</small></p></li></ul></section>
+          <section className="activity"><div className="mini-title"><div><small>LIVE PULSE</small><h3>Studio activity</h3></div><button onClick={() => setView("activity")} aria-label="View all activity">•••</button></div><ul><li><span className="pulse-avatar lilac">AS</span><p><b>Alex</b> moved <strong>Boss arena concept</strong> to Review<small>18 minutes ago</small></p></li><li><span className="pulse-avatar aqua">JL</span><p><b>Jules</b> completed <strong>Cave reverb zones</strong><small>42 minutes ago</small></p></li><li><span className="pulse-avatar gold">MK</span><p><b>Mina</b> added 2 comments<small>1 hour ago</small></p></li></ul></section>
         </div>
       </div>}
+
+      {view === "activity" && <div className="content activity-content"><div className="page-title"><div><p>WORKSPACE PULSE</p><h1>Activity</h1><h2>Every meaningful change across your studio, in one timeline.</h2></div><div className="activity-actions"><select value={activityFilter} onChange={event => setActivityFilter(event.target.value)} aria-label="Filter activity"><option>All activity</option><option>Cards</option><option>Comments</option><option>Milestones</option><option>Team</option></select><button className="secondary-button" onClick={() => setToast("Activity marked as reviewed")}>Mark all reviewed</button></div></div><div className="activity-layout"><section className="management-card activity-feed"><header><div><small>RECENT CHANGES</small><h3>{visibleActivity.length} events</h3></div><span className="live-indicator"><i /> Live</span></header><div className="activity-day"><span>TODAY</span></div>{visibleActivity.slice(0,4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}{visibleActivity.length > 4 && <><div className="activity-day"><span>YESTERDAY</span></div>{visibleActivity.slice(4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}</>}</section><aside className="activity-summary"><section className="management-card"><small>THIS WEEK</small><div className="summary-stat"><strong>42</strong><span>Cards updated</span></div><div className="summary-stat"><strong>18</strong><span>Completed</span></div><div className="summary-stat"><strong>27</strong><span>Comments</span></div></section><section className="management-card contributors"><small>TOP CONTRIBUTORS</small>{initialMembers.slice(1,4).map((member,index) => <div key={member.id}><span className="member-avatar">{member.initials}</span><p><b>{member.name}</b><small>{12-index*3} updates</small></p><strong>#{index+1}</strong></div>)}</section></aside></div></div>}
 
       {view === "quests" && <div className="content board-content">
         <div className="page-title"><div><p>PRODUCTION</p><h1>Production board</h1><h2>Move every quest from idea to shipped.</h2></div><div className="board-actions"><select value={project} onChange={e => setProject(e.target.value)} aria-label="Filter by project"><option>All projects</option>{projects.map(p => <option key={p.name}>{p.name}</option>)}</select><button onClick={() => { setProject("All projects"); setQuery(""); }}>Clear filters</button></div></div>
@@ -313,6 +352,8 @@ export default function Home() {
         </div>
       </div>}
 
+      {view === "projects-management" && <div className="content projects-admin-content"><div className="page-title"><div><p>PORTFOLIO</p><h1>Manage projects</h1><h2>Create, organize, and monitor every stream of studio work.</h2></div><button className="create-button" onClick={() => setCreateProjectOpen(true)}>＋ New project</button></div><div className="project-admin-toolbar"><div>{["All","Active","On hold","Archived"].map(status => <button className={projectStatusFilter === status ? "active" : ""} onClick={() => setProjectStatusFilter(status)} key={status}>{status}<span>{status === "All" ? projects.length : projects.filter(item => item.status === status).length}</span></button>)}</div><label>⌕ <input placeholder="Search projects…" /></label></div><section className="project-admin-list">{visibleProjects.map(item => <article className="project-admin-card" key={item.id}><span className={`project-color ${item.color}`} /><div className="project-main"><header><div><small>{item.status.toUpperCase()}</small><h3>{item.name}</h3></div><button aria-label={`Options for ${item.name}`}>•••</button></header><p><span className="member-avatar">{item.owner.split(/\s+/).map(part => part[0]).join("")}</span> Led by {item.owner}</p><div className="project-progress"><div><span style={{width:`${item.progress}%`}} /></div><b>{item.progress}%</b></div><footer><span><b>{item.count}</b> cards</span><span>Updated {item.updated}</span></footer></div><aside><button onClick={() => { setProject(item.name); setView("quests"); }}>Open board →</button><button onClick={() => toggleProjectArchive(item)}>{item.status === "Archived" ? "Restore project" : "Archive project"}</button></aside></article>)}</section>{visibleProjects.length === 0 && <div className="empty-projects"><span>◇</span><h3>No projects here</h3><p>Change the filter or create a new project.</p></div>}</div>}
+
       {view === "roles" && <div className="content roles-content"><div className="page-title"><div><p>PERMISSIONS</p><h1>Roles & access</h1><h2>Choose what each teammate can see, change, and manage.</h2></div><button className="secondary-button" onClick={() => { setView("management"); setInviteOpen(true); }}>＋ Assign a role</button></div><div className="role-cards">{roleDefinitions.map(role => <article className="role-card" key={role.name}><span className={`role-icon ${role.color}`}>{role.name[0]}</span><div><small>{role.count} {role.count === 1 ? "PERSON" : "PEOPLE"}</small><h3>{role.name}</h3><p>{role.description}</p></div><button onClick={() => setToast(`${role.name} permissions selected`)}>View members →</button></article>)}</div><section className="management-card permission-matrix"><header><div><small>ACCESS MATRIX</small><h3>Role permissions</h3></div><span>Changes apply across {activeWorkspace.name}</span></header><div className="matrix-row matrix-head"><b>Capability</b>{roleDefinitions.map(role => <b key={role.name}>{role.name}</b>)}</div>{["View projects","Create & edit cards","Manage members","Workspace settings","Billing & security"].map((permission,index) => <div className="matrix-row" key={permission}><span>{permission}</span>{roleDefinitions.map(role => <i className={role.permissions[index] ? "allowed" : "denied"} key={role.name}>{role.permissions[index] ? "✓" : "—"}</i>)}</div>)}</section><section className="role-guidance"><div><span>✦</span><div><b>Least-access recommendation</b><p>Use Guest for external reviewers and Member for day-to-day production. Reserve Admin for studio leads.</p></div></div><button onClick={() => setView("management")}>Review team assignments</button></section></div>}
 
       {view === "account" && <div className="content account-content">
@@ -326,6 +367,8 @@ export default function Home() {
     {inviteOpen && <div className="modal-backdrop" onMouseDown={() => setInviteOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Invite a workspace member"><header><div><small>TEAM ACCESS</small><h2>Invite a member</h2></div><button onClick={() => setInviteOpen(false)} aria-label="Close">×</button></header><form onSubmit={inviteMember}><label>Name<input name="name" placeholder="Teammate name" /></label><label>Email<input name="email" type="email" required autoFocus placeholder="name@studio.com" /></label><label>Workspace role<select name="role"><option>Member</option><option>Admin</option><option>Guest</option></select></label><div className="invite-note"><b>Access preview</b><p>Members can view all workspace projects and update assigned cards. You can change this role anytime.</p></div><footer><button type="button" onClick={() => setInviteOpen(false)}>Cancel</button><button className="create-button" type="submit">Prepare invitation</button></footer></form></section></div>}
 
     {createWorkspaceOpen && <div className="modal-backdrop" onMouseDown={() => setCreateWorkspaceOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create workspace"><header><div><small>NEW SPACE</small><h2>Create a workspace</h2></div><button onClick={() => setCreateWorkspaceOpen(false)} aria-label="Close">×</button></header><form onSubmit={createWorkspace}><label>Workspace name<input name="name" required autoFocus placeholder="Your studio or team" /></label><label>Workspace type<select name="plan"><option>Studio</option><option>Project</option><option>Personal</option></select></label><div className="invite-note"><b>A fresh deck</b><p>Your new workspace starts with its own members, projects, and production settings.</p></div><footer><button type="button" onClick={() => setCreateWorkspaceOpen(false)}>Cancel</button><button className="create-button" type="submit">Create workspace</button></footer></form></section></div>}
+
+    {createProjectOpen && <div className="modal-backdrop" onMouseDown={() => setCreateProjectOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create project"><header><div><small>NEW PROJECT</small><h2>Start a project</h2></div><button onClick={() => setCreateProjectOpen(false)} aria-label="Close">×</button></header><form onSubmit={createProject}><label>Project name<input name="name" required autoFocus placeholder="Project name" /></label><label>Project lead<select name="owner">{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>Starting template<select><option>Game production</option><option>Marketing campaign</option><option>Studio operations</option><option>Blank project</option></select></label><div className="invite-note"><b>Ready to plan</b><p>The new project will appear in your sidebar and project portfolio immediately.</p></div><footer><button type="button" onClick={() => setCreateProjectOpen(false)}>Cancel</button><button className="create-button" type="submit">Create project</button></footer></form></section></div>}
 
     {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2><p>{selected.description}</p><div className="detail-grid"><div><small>OWNER</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>DUE</small><b>◷ {selected.due}</b></div></div><label>Status<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option key={s}>{s}</option>)}</select></label><div className="checklist"><small>CHECKLIST · 2/3</small><p>✓ Verify keyboard controls</p><p>✓ Test with controller</p><p>○ Capture playtest notes</p></div></div></section></div>}
     {toast && <div className="toast">✓ {toast}</div>}
