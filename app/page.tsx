@@ -26,6 +26,7 @@ type BoardBackup = { version: 1; product: "Questdeck"; createdAt: string; cards:
 type WorkspaceBackupAttachment = { path: string; mimeType: string; dataUrl: string };
 type WorkspaceBackup = { version: 2; product: "Questdeck"; kind: "full-workspace"; createdAt: string; workspace: { cards: Card[]; subTodos: Record<number, SubTodo[]>; projects: Project[]; milestones: Milestone[]; productionDisciplines: ProductionDiscipline[]; members: Member[]; roleDefinitions: RoleDefinition[]; workspaces: Workspace[]; activeWorkspaceId: string; settings: { studioName: string; weeklyDigest: boolean; defaultProjectId: string; language: "en" | "ko" }; documents: WorkspaceDocument[]; documentComments: DocumentComment[]; notifications: Notification[]; activityEvents: ActivityEvent[]; columnNames: Partial<Record<Status, string>> }; attachments: WorkspaceBackupAttachment[] };
 type CardHoverPreview = { card: Card; left: number; top: number; completed: number; total: number };
+type TimelineGesture = { cardId: number; mode: "move" | "start" | "end"; pointerId: number; startClientX: number; dayWidth: number; originStart: Date; originEnd: Date; currentStart: Date; currentEnd: Date };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -334,6 +335,9 @@ export default function Home() {
   const [timelineRowHeight, setTimelineRowHeight] = useState(132);
   const [timelineHover, setTimelineHover] = useState<{cardId: number; left: number; top: number} | null>(null);
   const [draggedTimelineCard, setDraggedTimelineCard] = useState<number | null>(null);
+  const [timelineGesture, setTimelineGesture] = useState<TimelineGesture | null>(null);
+  const timelineGestureRef = useRef<TimelineGesture | null>(null);
+  const timelineDidDrag = useRef(false);
   const [draggedBoardCard, setDraggedBoardCard] = useState<number | null>(null);
   const [boardDropStatus, setBoardDropStatus] = useState<Status | null>(null);
   const [boardDropAction, setBoardDropAction] = useState<"archive" | "delete" | null>(null);
@@ -1642,6 +1646,86 @@ export default function Home() {
     return Array.from(groups, ([discipline, items]) => ({ discipline, items }));
   }, [timelineCards]);
 
+  function setActiveTimelineGesture(gesture: TimelineGesture | null) {
+    timelineGestureRef.current = gesture;
+    setTimelineGesture(gesture);
+  }
+
+  function beginTimelineGesture(event: React.PointerEvent<HTMLElement>, cardId: number, mode: TimelineGesture["mode"], startDate: Date, endDate: Date) {
+    if (event.button !== 0) return;
+    const track = event.currentTarget.closest(".lane-track");
+    if (!track) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const normalizedStart = startOfDay(startDate);
+    const normalizedEnd = startOfDay(endDate);
+    timelineDidDrag.current = false;
+    setTimelineHover(null);
+    setDraggedTimelineCard(cardId);
+    setActiveTimelineGesture({ cardId, mode, pointerId: event.pointerId, startClientX: event.clientX, dayWidth: track.getBoundingClientRect().width / timelineDayCount, originStart: normalizedStart, originEnd: normalizedEnd, currentStart: normalizedStart, currentEnd: normalizedEnd });
+  }
+
+  function updateTimelineGesture(event: React.PointerEvent<HTMLElement>) {
+    const gesture = timelineGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const rawDelta = (event.clientX - gesture.startClientX) / gesture.dayWidth;
+    if (Math.abs(rawDelta) > .18) timelineDidDrag.current = true;
+    const deltaDays = Math.round(rawDelta);
+    let currentStart = gesture.originStart;
+    let currentEnd = gesture.originEnd;
+    if (gesture.mode === "move") {
+      const duration = Math.max(0, Math.round((gesture.originEnd.getTime() - gesture.originStart.getTime()) / dayMs));
+      const earliestDelta = Math.round((timelineStart.getTime() - gesture.originStart.getTime()) / dayMs);
+      const latestDelta = Math.round((addDays(timelineEnd, -duration).getTime() - gesture.originStart.getTime()) / dayMs);
+      const safeDelta = Math.max(earliestDelta, Math.min(latestDelta, deltaDays));
+      currentStart = addDays(gesture.originStart, safeDelta);
+      currentEnd = addDays(gesture.originEnd, safeDelta);
+    } else if (gesture.mode === "start") {
+      const candidate = addDays(gesture.originStart, deltaDays);
+      currentStart = candidate < timelineStart ? timelineStart : candidate > gesture.originEnd ? gesture.originEnd : candidate;
+    } else {
+      const candidate = addDays(gesture.originEnd, deltaDays);
+      currentEnd = candidate > timelineEnd ? timelineEnd : candidate < gesture.originStart ? gesture.originStart : candidate;
+    }
+    setActiveTimelineGesture({ ...gesture, currentStart, currentEnd });
+  }
+
+  async function finishTimelineGesture(event: React.PointerEvent<HTMLElement>) {
+    const gesture = timelineGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setActiveTimelineGesture(null);
+    setDraggedTimelineCard(null);
+    const changed = gesture.currentStart.getTime() !== gesture.originStart.getTime() || gesture.currentEnd.getTime() !== gesture.originEnd.getTime();
+    if (!changed) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const previous = cards.find(card => card.id === gesture.cardId);
+    if (!previous) return;
+    const toInputDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+    const updated = { ...previous, startDate: toInputDate(gesture.currentStart), dueDate: toInputDate(gesture.currentEnd), due: timelineDateLabel(gesture.currentEnd) };
+    setCards(current => current.map(card => card.id === updated.id ? updated : card));
+    setSelected(current => current?.id === updated.id ? updated : current);
+    try {
+      await syncQuestdeck("update_card", { card: updated }, accessToken);
+      setToast(gesture.mode === "move" ? tr(`${updated.title} moved to ${updated.due}`, `${updated.title} 카드를 ${updated.due}(으)로 이동했습니다`) : gesture.mode === "start" ? tr(`Start date moved to ${timelineDateLabel(gesture.currentStart)}`, `시작일을 ${timelineDateLabel(gesture.currentStart)}(으)로 변경했습니다`) : tr(`Due date moved to ${timelineDateLabel(gesture.currentEnd)}`, `마감일을 ${timelineDateLabel(gesture.currentEnd)}(으)로 변경했습니다`));
+    } catch (error) {
+      setCards(current => current.map(card => card.id === previous.id ? previous : card));
+      setSelected(current => current?.id === previous.id ? previous : current);
+      setToast(error instanceof Error ? error.message : tr("Could not update timeline dates", "타임라인 날짜를 변경하지 못했습니다"));
+    }
+  }
+
+  function cancelTimelineGesture(event?: React.PointerEvent<HTMLElement>) {
+    if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setActiveTimelineGesture(null);
+    setDraggedTimelineCard(null);
+  }
+
   async function moveTimelineCard(cardId: number, date: Date) {
     const accessToken = requireSession();
     if (!accessToken) return;
@@ -1797,28 +1881,19 @@ export default function Home() {
                       if (cardId) void moveTimelineCard(cardId, dropDate);
                     }} />)}
                     {items.map(({card,startDate,endDate},itemIndex) => {
-                      const visibleStart = startDate < timelineStart ? timelineStart : startDate;
-                      const visibleEnd = endDate > timelineEnd ? timelineEnd : endDate;
+                      const activeGesture = timelineGesture?.cardId === card.id ? timelineGesture : null;
+                      const displayStart = activeGesture?.currentStart ?? startDate;
+                      const displayEnd = activeGesture?.currentEnd ?? endDate;
+                      const visibleStart = displayStart < timelineStart ? timelineStart : displayStart;
+                      const visibleEnd = displayEnd > timelineEnd ? timelineEnd : displayEnd;
                       const start = Math.max(0, Math.floor((visibleStart.getTime() - timelineStart.getTime()) / dayMs));
                       const span = Math.max(1, Math.floor((visibleEnd.getTime() - visibleStart.getTime()) / dayMs) + 1);
                       const todos = subTodos[card.id] ?? [];
                       const completed = todos.filter(todo => todo.done).length;
-                      const finishPointerResize = (event: React.PointerEvent<HTMLSpanElement>, edge: "start" | "end") => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        const track = event.currentTarget.closest(".lane-track");
-                        if (!track) return;
-                        const rect = track.getBoundingClientRect();
-                        const position = Math.max(0, Math.min(rect.width - 1, event.clientX - rect.left));
-                        const dayIndex = Math.min(timelineDayCount - 1, Math.floor(position / rect.width * timelineDayCount));
-                        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-                        setDraggedTimelineCard(null);
-                        void resizeTimelineCard(card.id, edge, timelineDates[dayIndex]);
-                      };
-                      return <button draggable onDragStart={(event: DragEvent<HTMLButtonElement>) => { if ((event.target as HTMLElement).closest(".timeline-resize-handle")) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-card", String(card.id)); setDraggedTimelineCard(card.id); setTimelineHover(null); }} onDragEnd={() => setDraggedTimelineCard(null)} onMouseEnter={event => showTimelineTooltip(card.id, event.currentTarget)} onMouseLeave={() => setTimelineHover(null)} onFocus={event => showTimelineTooltip(card.id, event.currentTarget)} onBlur={() => setTimelineHover(null)} className={`run-bar grouped-run-bar ${card.color} timeline-priority-${priorityTone(card.priority)} ${draggedTimelineCard === card.id ? "dragging" : ""}`} style={{gridColumn:`${start + 1} / span ${span}`,gridRow:itemIndex + 1}} onClick={() => setSelected(card)} aria-label={tr(`Open ${card.title}; drag the middle to move or an edge to resize`, `${card.title} 열기; 가운데를 끌어 이동하거나 가장자리를 끌어 기간 변경`)} key={card.id}>
-                        <span className="timeline-resize-handle start-handle" onPointerDown={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); setDraggedTimelineCard(card.id); setTimelineHover(null); }} onPointerUp={event => finishPointerResize(event, "start")} onPointerCancel={() => setDraggedTimelineCard(null)} onClick={event => event.stopPropagation()} title={tr("Drag to adjust start date", "시작일을 변경하려면 끌기")} aria-hidden="true" />
-                        <b className={`run-priority ${priorityTone(card.priority)}`}>P{card.priority}</b><b className={`run-status status-${card.status.toLowerCase().replace(" ", "-")}`}>{statusLabel(card.status)}</b><span className="run-card-title">{card.title}</span>{todos.length > 0 && <small className="run-subtasks">☑ {completed}/{todos.length}</small>}<small>{timelineDateLabel(startDate)} → {timelineDateLabel(endDate)}</small>
-                        <span className="timeline-resize-handle end-handle" onPointerDown={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); setDraggedTimelineCard(card.id); setTimelineHover(null); }} onPointerUp={event => finishPointerResize(event, "end")} onPointerCancel={() => setDraggedTimelineCard(null)} onClick={event => event.stopPropagation()} title={tr("Drag to adjust due date", "마감일을 변경하려면 끌기")} aria-hidden="true" />
+                      return <button onPointerDown={event => { if (!(event.target as HTMLElement).closest(".timeline-resize-handle")) beginTimelineGesture(event, card.id, "move", startDate, endDate); }} onPointerMove={updateTimelineGesture} onPointerUp={event => void finishTimelineGesture(event)} onPointerCancel={cancelTimelineGesture} onMouseEnter={event => { if (!timelineGestureRef.current) showTimelineTooltip(card.id, event.currentTarget); }} onMouseLeave={() => setTimelineHover(null)} onFocus={event => showTimelineTooltip(card.id, event.currentTarget)} onBlur={() => setTimelineHover(null)} className={`run-bar grouped-run-bar ${card.color} timeline-priority-${priorityTone(card.priority)} ${activeGesture ? `gesture-active gesture-${activeGesture.mode}` : ""}`} style={{gridColumn:`${start + 1} / span ${span}`,gridRow:itemIndex + 1}} onClick={event => { if (timelineDidDrag.current) { timelineDidDrag.current = false; event.preventDefault(); return; } setSelected(card); }} aria-label={tr(`Open ${card.title}; drag the middle to move or an edge to resize`, `${card.title} 열기; 가운데를 끌어 이동하거나 가장자리를 끌어 기간 변경`)} key={card.id}>
+                        <span className="timeline-resize-handle start-handle" onPointerDown={event => beginTimelineGesture(event, card.id, "start", startDate, endDate)} onPointerMove={updateTimelineGesture} onPointerUp={event => void finishTimelineGesture(event)} onPointerCancel={cancelTimelineGesture} onClick={event => event.stopPropagation()} title={tr("Drag to adjust start date", "시작일을 변경하려면 끌기")} aria-hidden="true" />
+                        <b className={`run-priority ${priorityTone(card.priority)}`}>P{card.priority}</b><b className={`run-status status-${card.status.toLowerCase().replace(" ", "-")}`}>{statusLabel(card.status)}</b><span className="run-card-title">{card.title}</span>{todos.length > 0 && <small className="run-subtasks">☑ {completed}/{todos.length}</small>}<small>{timelineDateLabel(displayStart)} → {timelineDateLabel(displayEnd)}</small>{activeGesture && <span className="timeline-gesture-readout">{activeGesture.mode === "move" ? tr("Move", "이동") : activeGesture.mode === "start" ? tr("Start", "시작") : tr("Due", "마감")} · {timelineDateLabel(displayStart)} → {timelineDateLabel(displayEnd)}</span>}
+                        <span className="timeline-resize-handle end-handle" onPointerDown={event => beginTimelineGesture(event, card.id, "end", startDate, endDate)} onPointerMove={updateTimelineGesture} onPointerUp={event => void finishTimelineGesture(event)} onPointerCancel={cancelTimelineGesture} onClick={event => event.stopPropagation()} title={tr("Drag to adjust due date", "마감일을 변경하려면 끌기")} aria-hidden="true" />
                         <i style={{width:`${card.status === "Done" ? 100 : todos.length ? Math.round(completed / todos.length * 100) : 0}%`}}/>
                       </button>;
                     })}
