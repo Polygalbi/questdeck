@@ -987,6 +987,31 @@ export default function Home() {
     }
   }
 
+  async function resizeTimelineCard(cardId: number, edge: "start" | "end", date: Date) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const previous = cards.find(card => card.id === cardId);
+    if (!previous) return;
+    const previousEnd = previous.dueDate ? new Date(`${previous.dueDate}T12:00:00`) : cardDueDate(previous.due);
+    if (!previousEnd) return;
+    const previousStart = previous.startDate ? new Date(`${previous.startDate}T12:00:00`) : previousEnd;
+    const nextStart = edge === "start" ? (date > previousEnd ? previousEnd : date) : previousStart;
+    const nextEnd = edge === "end" ? (date < previousStart ? previousStart : date) : previousEnd;
+    const toInputDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+    const updated = { ...previous, startDate: toInputDate(nextStart), dueDate: toInputDate(nextEnd), due: timelineDateLabel(nextEnd) };
+    setCards(current => current.map(card => card.id === cardId ? updated : card));
+    setSelected(current => current?.id === cardId ? updated : current);
+    setDraggedTimelineCard(null);
+    try {
+      await syncQuestdeck("update_card", { card: updated }, accessToken);
+      setToast(edge === "start" ? tr(`Start date moved to ${timelineDateLabel(nextStart)}`, `시작일을 ${timelineDateLabel(nextStart)}(으)로 변경했습니다`) : tr(`Due date moved to ${timelineDateLabel(nextEnd)}`, `마감일을 ${timelineDateLabel(nextEnd)}(으)로 변경했습니다`));
+    } catch (error) {
+      setCards(current => current.map(card => card.id === cardId ? previous : card));
+      setSelected(current => current?.id === cardId ? previous : current);
+      setToast(error instanceof Error ? error.message : tr("Could not resize timeline card", "타임라인 기간을 변경하지 못했습니다"));
+    }
+  }
+
   function showTimelineTooltip(cardId: number, element: HTMLElement) {
     const rect = element.getBoundingClientRect();
     const tooltipWidth = 290;
@@ -1071,7 +1096,43 @@ export default function Home() {
             <div className="date-grid" style={{gridTemplateColumns:`210px repeat(${timelineDayCount},minmax(58px,1fr))`}}><div className="date-label-spacer"/>{timelineDates.map(date => { const today = date.getTime() === timelineReferenceDate.getTime(); const weekend = date.getDay() === 0 || date.getDay() === 6; return <div className={`date-cell ${today ? "today" : ""} ${weekend ? "weekend" : ""}`} key={date.toISOString()}><small>{date.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { weekday: "short" })}</small><b>{date.getDate()}</b></div>})}</div>
             <div className="schedule-body">
               {timelineReferenceDate >= timelineStart && timelineReferenceDate <= timelineEnd && <div className="today-line" style={{left:`calc(210px + ((100% - 210px) / ${timelineDayCount} * ${Math.floor((timelineReferenceDate.getTime() - timelineStart.getTime()) / dayMs) + .5}))`}} aria-hidden="true"><span>{tr("Today", "오늘")}</span></div>}
-              {timelineCards.map(({card,startDate,endDate}) => { const visibleStart = startDate < timelineStart ? timelineStart : startDate; const visibleEnd = endDate > timelineEnd ? timelineEnd : endDate; const start = Math.max(0, Math.floor((visibleStart.getTime() - timelineStart.getTime()) / dayMs)); const span = Math.max(1, Math.floor((visibleEnd.getTime() - visibleStart.getTime()) / dayMs) + 1); const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; return <div className="schedule-row" key={card.id}><div className="lane-label"><span className={`lane-swatch ${card.color}`}/><div><b>{card.title}</b><small>{card.tag} · {card.owner} · {statusLabel(card.status)}</small></div></div><div className="lane-track" style={{gridTemplateColumns:`repeat(${timelineDayCount},minmax(58px,1fr))`, "--timeline-columns":timelineDayCount} as CSSProperties}>{timelineDates.map((dropDate,index) => <div className={`timeline-drop-zone ${draggedTimelineCard ? "drag-active" : ""}`} style={{gridColumn:index + 1}} key={dropDate.toISOString()} onDragOver={event => event.preventDefault()} onDrop={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-card") || draggedTimelineCard); if (cardId) void moveTimelineCard(cardId, dropDate); }} />)}<button draggable onDragStart={(event: DragEvent<HTMLButtonElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-card", String(card.id)); setDraggedTimelineCard(card.id); }} onDragEnd={() => setDraggedTimelineCard(null)} onMouseEnter={event => showTimelineTooltip(card.id, event.currentTarget)} onMouseLeave={() => setTimelineHover(null)} onFocus={event => showTimelineTooltip(card.id, event.currentTarget)} onBlur={() => setTimelineHover(null)} className={`run-bar ${card.color} ${draggedTimelineCard === card.id ? "dragging" : ""}`} style={{gridColumn:`${start + 1} / span ${span}`}} onClick={() => setSelected(card)} aria-label={tr(`Open ${card.title}; drag to reschedule`, `${card.title} 열기; 끌어서 일정 변경`)}><span>{card.title}</span>{todos.length > 0 && <small className="run-subtasks">☑ {completed}/{todos.length}</small>}<small>{timelineDateLabel(startDate)} → {timelineDateLabel(endDate)}</small><i style={{width:`${card.status === "Done" ? 100 : todos.length ? Math.round(completed / todos.length * 100) : 0}%`}}/></button></div></div>})}
+              {timelineCards.map(({card,startDate,endDate}) => {
+                const visibleStart = startDate < timelineStart ? timelineStart : startDate;
+                const visibleEnd = endDate > timelineEnd ? timelineEnd : endDate;
+                const start = Math.max(0, Math.floor((visibleStart.getTime() - timelineStart.getTime()) / dayMs));
+                const span = Math.max(1, Math.floor((visibleEnd.getTime() - visibleStart.getTime()) / dayMs) + 1);
+                const todos = subTodos[card.id] ?? [];
+                const completed = todos.filter(todo => todo.done).length;
+                const beginResize = (event: DragEvent<HTMLSpanElement>, edge: "start" | "end") => {
+                  event.stopPropagation();
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/questdeck-resize", `${card.id}:${edge}`);
+                  setDraggedTimelineCard(card.id);
+                  setTimelineHover(null);
+                };
+                return <div className="schedule-row" key={card.id}>
+                  <div className="lane-label"><span className={`lane-swatch ${card.color}`}/><div><b>{card.tag}</b><small>{card.title} · {card.owner} · {statusLabel(card.status)}</small></div></div>
+                  <div className="lane-track" style={{gridTemplateColumns:`repeat(${timelineDayCount},minmax(58px,1fr))`, "--timeline-columns":timelineDayCount} as CSSProperties}>
+                    {timelineDates.map((dropDate,index) => <div className={`timeline-drop-zone ${draggedTimelineCard ? "drag-active" : ""}`} style={{gridColumn:index + 1}} key={dropDate.toISOString()} onDragOver={event => event.preventDefault()} onDrop={(event: DragEvent<HTMLDivElement>) => {
+                      event.preventDefault();
+                      const resizePayload = event.dataTransfer.getData("text/questdeck-resize");
+                      if (resizePayload) {
+                        const [resizeCardId, edge] = resizePayload.split(":");
+                        void resizeTimelineCard(Number(resizeCardId), edge as "start" | "end", dropDate);
+                        return;
+                      }
+                      const cardId = Number(event.dataTransfer.getData("text/questdeck-card") || draggedTimelineCard);
+                      if (cardId) void moveTimelineCard(cardId, dropDate);
+                    }} />)}
+                    <button draggable onDragStart={(event: DragEvent<HTMLButtonElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-card", String(card.id)); setDraggedTimelineCard(card.id); setTimelineHover(null); }} onDragEnd={() => setDraggedTimelineCard(null)} onMouseEnter={event => showTimelineTooltip(card.id, event.currentTarget)} onMouseLeave={() => setTimelineHover(null)} onFocus={event => showTimelineTooltip(card.id, event.currentTarget)} onBlur={() => setTimelineHover(null)} className={`run-bar ${card.color} ${draggedTimelineCard === card.id ? "dragging" : ""}`} style={{gridColumn:`${start + 1} / span ${span}`}} onClick={() => setSelected(card)} aria-label={tr(`Open ${card.title}; drag the middle to move or an edge to resize`, `${card.title} 열기; 가운데를 끌어 이동하거나 가장자리를 끌어 기간 변경`)}>
+                      <span className="timeline-resize-handle start-handle" draggable onDragStart={event => beginResize(event, "start")} onDragEnd={() => setDraggedTimelineCard(null)} onClick={event => event.stopPropagation()} title={tr("Drag to adjust start date", "시작일을 변경하려면 끌기")} aria-hidden="true" />
+                      <span>{card.title}</span>{todos.length > 0 && <small className="run-subtasks">☑ {completed}/{todos.length}</small>}<small>{timelineDateLabel(startDate)} → {timelineDateLabel(endDate)}</small>
+                      <span className="timeline-resize-handle end-handle" draggable onDragStart={event => beginResize(event, "end")} onDragEnd={() => setDraggedTimelineCard(null)} onClick={event => event.stopPropagation()} title={tr("Drag to adjust due date", "마감일을 변경하려면 끌기")} aria-hidden="true" />
+                      <i style={{width:`${card.status === "Done" ? 100 : todos.length ? Math.round(completed / todos.length * 100) : 0}%`}}/>
+                    </button>
+                  </div>
+                </div>;
+              })}
               {timelineCards.length === 0 && <div className="timeline-empty"><span>◇</span><div><b>{tr("No scheduled cards in this period", "이 기간에 예정된 카드가 없습니다")}</b><small>{tr("Choose another project or move to a different date range.", "다른 프로젝트를 선택하거나 날짜 범위를 이동하세요.")}</small></div></div>}
             </div>
           </div>
