@@ -261,11 +261,14 @@ export default function Home() {
   const [editingDocument, setEditingDocument] = useState<WorkspaceDocument | null>(null);
   const [documentDraftTitle, setDocumentDraftTitle] = useState("");
   const [documentDraftContent, setDocumentDraftContent] = useState("");
+  const [documentChangeVersion, setDocumentChangeVersion] = useState(0);
   const [documentDirty, setDocumentDirty] = useState(false);
   const [documentSaveState, setDocumentSaveState] = useState<"saved" | "saving" | "unsaved">("saved");
   const [documentComments, setDocumentComments] = useState<DocumentComment[]>([]);
   const [documentCommentsOpen, setDocumentCommentsOpen] = useState(true);
   const documentEditorRef = useRef<HTMLDivElement | null>(null);
+  const documentEditingIdRef = useRef<number | null>(null);
+  const documentDirtyRef = useRef(false);
   const documentSelectionRef = useRef<Range | null>(null);
   const documentTableCellRef = useRef<HTMLTableCellElement | null>(null);
   const documentImageInputRef = useRef<HTMLInputElement | null>(null);
@@ -475,7 +478,7 @@ export default function Home() {
     if (!documentEditorOpen || !editingDocument || !documentDirty) return;
     const timer = window.setTimeout(() => void saveDocumentDraft(false), 1100);
     return () => window.clearTimeout(timer);
-  }, [documentEditorOpen, editingDocument?.id, documentDraftTitle, documentDraftContent, documentDirty]);
+  }, [documentEditorOpen, editingDocument?.id, documentDraftTitle, documentChangeVersion, documentDirty]);
   useEffect(() => {
     const editor = documentEditorRef.current;
     if (!documentEditorOpen || !editor) return;
@@ -1288,6 +1291,8 @@ export default function Home() {
 
   function openDocumentEditor(document: WorkspaceDocument) {
     const content = sanitizeRichText(document.content);
+    documentEditingIdRef.current = document.id;
+    documentDirtyRef.current = false;
     setEditingDocument(document);
     setDocumentDraftTitle(document.title);
     setDocumentDraftContent(content);
@@ -1296,7 +1301,11 @@ export default function Home() {
     setDocumentCommentsOpen(true);
     setDocumentEditorOpen(true);
     void loadDocumentComments(document.id);
-    void hydrateDocumentImages(content).then(hydrated => setDocumentDraftContent(hydrated));
+    void hydrateDocumentImages(content).then(hydrated => {
+      if (documentEditingIdRef.current !== document.id || documentDirtyRef.current) return;
+      setDocumentDraftContent(hydrated);
+      if (documentEditorRef.current) documentEditorRef.current.innerHTML = hydrated;
+    });
   }
 
   async function createBlankDocument() {
@@ -1323,6 +1332,7 @@ export default function Home() {
       const saved = mapDocument(result.document);
       setDocuments(current => current.map(item => item.id === saved.id ? saved : item));
       setEditingDocument(saved);
+      documentDirtyRef.current = false;
       setDocumentDirty(false);
       setDocumentSaveState("saved");
       if (closeAfter) { setDocumentEditorOpen(false); setEditingDocument(null); setDocumentComments([]); setToast(tr("Document saved", "문서를 저장했습니다")); }
@@ -1338,9 +1348,9 @@ export default function Home() {
   }
 
   function updateDocumentContent() {
-    const content = documentEditorRef.current?.innerHTML ?? "";
-    setDocumentDraftContent(content);
+    documentDirtyRef.current = true;
     setDocumentDirty(true);
+    setDocumentChangeVersion(version => version + 1);
     setDocumentSaveState("unsaved");
   }
 
@@ -1562,7 +1572,8 @@ export default function Home() {
     const accessToken = requireSession();
     if (!accessToken) return;
     try {
-      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>("update_document", { document: { ...document, isPublished } }, accessToken);
+      const liveContent = editingDocument?.id === document.id ? sanitizeRichText(documentEditorRef.current?.innerHTML ?? document.content) : document.content;
+      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>("update_document", { document: { ...document, content: liveContent, isPublished } }, accessToken);
       const saved = mapDocument(result.document);
       setDocuments(current => current.map(item => item.id === saved.id ? saved : item));
       setEditingDocument(current => current?.id === saved.id ? saved : current);

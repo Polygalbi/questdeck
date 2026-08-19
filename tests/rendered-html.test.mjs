@@ -46,6 +46,10 @@ test("includes working document editing and table controls", async () => {
   assert.match(page, /handleDocumentKeyDown/);
   assert.match(page, /document-table-picker/);
   assert.match(page, /mutateDocumentTable/);
+  const inputHandler = page.match(/function updateDocumentContent\(\) \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+  assert.doesNotMatch(inputHandler, /setDocumentDraftContent/);
+  assert.match(inputHandler, /setDocumentChangeVersion/);
   assert.match(css, /\.rich-document-content ol\{list-style:decimal/);
+  assert.match(css, /caret-color:#6248cf/);
   assert.match(css, /\.document-editor-assist/);
 });
