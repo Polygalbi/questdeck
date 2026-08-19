@@ -20,6 +20,8 @@ type ProductionDiscipline = { id: number; name: string; color: string };
 type WorkspaceDocument = { id: number; title: string; content: string; createdByEmail: string; ownerName: string; isPublished: boolean; shareSlug: string; createdAt: string; updatedAt: string };
 type DocumentComment = { id: number; documentId: number; userId: string; authorEmail: string; authorName: string; body: string; createdAt: string };
 type Milestone = { id: number; title: string; milestoneDate: string; progress: number; completedCards: number; totalCards: number; note: string; color: "violet" | "mint" | "coral"; stage: string };
+type BoardSort = "Default" | "Priority" | "Priority low" | "Due date" | "Due date latest" | "Effort" | "Effort low" | "Title" | "Newest";
+type BoardBackup = { version: 1; product: "Questdeck"; createdAt: string; cards: Card[]; subTodos: Record<number, SubTodo[]>; columnNames: Partial<Record<Status, string>> };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -273,8 +275,17 @@ export default function Home() {
   const [disciplineManagerOpen, setDisciplineManagerOpen] = useState(false);
   const [newProductionDiscipline, setNewProductionDiscipline] = useState("");
   const [editingProductionDiscipline, setEditingProductionDiscipline] = useState<ProductionDiscipline | null>(null);
-  const [boardSort, setBoardSort] = useState<"Default" | "Priority" | "Due date" | "Effort">("Default");
+  const [boardSort, setBoardSort] = useState<BoardSort>("Default");
   const [priorityFilter, setPriorityFilter] = useState<"All" | "Critical" | "High" | "Normal">("All");
+  const [ownerFilter, setOwnerFilter] = useState("All");
+  const [disciplineFilter, setDisciplineFilter] = useState("All");
+  const [dueFilter, setDueFilter] = useState<"All" | "Overdue" | "Today" | "This week" | "No date">("All");
+  const [boardDensity, setBoardDensity] = useState<"comfortable" | "compact">("compact");
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [quickCardTitles, setQuickCardTitles] = useState<Partial<Record<Status, string>>>({});
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const backupInputRef = useRef<HTMLInputElement | null>(null);
   const [activeColumnMenu, setActiveColumnMenu] = useState<Status | null>(null);
   const [editColumn, setEditColumn] = useState<Status | null>(null);
   const [columnNames, setColumnNames] = useState<Partial<Record<Status, string>>>({});
@@ -436,6 +447,10 @@ export default function Home() {
     const savedProjects = window.localStorage.getItem("questdeck-projects");
     const savedDisciplines = window.localStorage.getItem("questdeck-disciplines");
     const savedLanguage = window.localStorage.getItem("questdeck-language");
+    const savedCards = window.localStorage.getItem("questdeck-cards");
+    const savedSubTodos = window.localStorage.getItem("questdeck-sub-todos");
+    if (savedCards) { try { const parsed = JSON.parse(savedCards); if (Array.isArray(parsed)) setCards(parsed); } catch {} }
+    if (savedSubTodos) { try { setSubTodos(JSON.parse(savedSubTodos)); } catch {} }
     if (savedMembers) { try { setMembers(JSON.parse(savedMembers)); } catch {} }
     if (savedSettings) { try { const parsed = JSON.parse(savedSettings); setStudioName(parsed.studioName ?? "Starfall Studio"); setWeeklyDigest(parsed.weeklyDigest ?? true); setDefaultProjectId(parsed.defaultProjectId ?? "nightfall"); } catch {} }
     if (savedWorkspaces) { try { const parsed = JSON.parse(savedWorkspaces); setWorkspaces((parsed.workspaces ?? initialWorkspaces).map((workspace: Workspace) => ({ ...workspace, status: workspace.status ?? "Active" }))); setActiveWorkspaceId(parsed.activeWorkspaceId ?? "starfall"); } catch {} }
@@ -460,19 +475,32 @@ export default function Home() {
 
   const filtered = useMemo(() => {
     const archivedProjectNames = new Set(projects.filter(item => item.status === "Archived").map(item => item.name));
+    const today = new Date();
+    const todayKey = today.toISOString().slice(0, 10);
+    const weekEnd = new Date(today);
+    weekEnd.setDate(today.getDate() + 7);
+    const weekEndKey = weekEnd.toISOString().slice(0, 10);
     const visible = cards.filter(card => {
       const matchesQuery = `${card.title} ${card.description} ${card.tag} ${card.project}`.toLowerCase().includes(query.toLowerCase());
       const tone = priorityTone(card.priority);
       const matchesPriority = priorityFilter === "All" || (priorityFilter === "Critical" && tone === "critical") || (priorityFilter === "High" && tone === "high") || (priorityFilter === "Normal" && tone === "normal");
-      return !card.archived && !archivedProjectNames.has(card.project) && matchesQuery && matchesPriority && (project === "All projects" || card.project === project);
+      const matchesOwner = ownerFilter === "All" || card.owner === ownerFilter;
+      const matchesDiscipline = disciplineFilter === "All" || card.tag === disciplineFilter;
+      const matchesDue = dueFilter === "All" || (dueFilter === "No date" && !card.dueDate) || (dueFilter === "Overdue" && Boolean(card.dueDate && card.dueDate < todayKey && card.status !== "Done")) || (dueFilter === "Today" && card.dueDate === todayKey) || (dueFilter === "This week" && Boolean(card.dueDate && card.dueDate >= todayKey && card.dueDate <= weekEndKey));
+      return !card.archived && !archivedProjectNames.has(card.project) && matchesQuery && matchesPriority && matchesOwner && matchesDiscipline && matchesDue && (project === "All projects" || card.project === project);
     });
     return [...visible].sort((a, b) => {
       if (boardSort === "Priority") return b.priority - a.priority;
+      if (boardSort === "Priority low") return a.priority - b.priority;
       if (boardSort === "Effort") return b.points - a.points;
+      if (boardSort === "Effort low") return a.points - b.points;
       if (boardSort === "Due date") return (a.dueDate ?? "9999-12-31").localeCompare(b.dueDate ?? "9999-12-31");
+      if (boardSort === "Due date latest") return (b.dueDate ?? "0000-00-00").localeCompare(a.dueDate ?? "0000-00-00");
+      if (boardSort === "Title") return a.title.localeCompare(b.title);
+      if (boardSort === "Newest") return b.id - a.id;
       return a.id - b.id;
     });
-  }, [boardSort, cards, priorityFilter, projects, query, project]);
+  }, [boardSort, cards, disciplineFilter, dueFilter, ownerFilter, priorityFilter, projects, query, project]);
 
   function requireSession() {
     if (session?.access_token) return session.access_token;
@@ -532,6 +560,72 @@ export default function Home() {
     };
     setCards(prev => [newCard, ...prev]); setCreateOpen(false); setToast("Card added to your deck"); setView("quests");
     void syncQuestdeck("create_card", { card: newCard }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+  }
+
+  function quickAddCard(event: FormEvent<HTMLFormElement>, status: Status) {
+    event.preventDefault();
+    const title = (quickCardTitles[status] ?? "").trim();
+    if (!title) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const targetProject = project === "All projects" ? defaultProjectName : project;
+    if (!targetProject) { setToast(tr("Create an active project first", "먼저 활성 프로젝트를 만들어 주세요")); return; }
+    const discipline = productionDisciplines.find(item => item.name === "General") ?? productionDisciplines[0];
+    const newCard: Card = {
+      id: Date.now(), title, description: "", tag: discipline?.name ?? "General", owner: currentMember?.initials ?? activeCardOwners[0]?.initials ?? "JK",
+      points: 3, priority: 5, color: discipline?.color ?? "blue-card", status, project: targetProject, due: "No date", dueDate: null, startDate: null, archived: false,
+    };
+    setCards(current => [newCard, ...current]);
+    setQuickCardTitles(current => ({ ...current, [status]: "" }));
+    setToast(tr(`Added “${title}” to ${statusLabel(status)}`, `“${title}” 카드를 ${statusLabel(status)}에 추가했습니다`));
+    void syncQuestdeck("create_card", { card: newCard }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+  }
+
+  function downloadBoardBackup() {
+    const backup: BoardBackup = { version: 1, product: "Questdeck", createdAt: new Date().toISOString(), cards, subTodos, columnNames };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `questdeck-board-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setToast(tr("Board backup downloaded", "보드 백업을 다운로드했습니다"));
+  }
+
+  async function restoreBoardBackup(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > 5_000_000) { setToast(tr("Backup file is too large", "백업 파일이 너무 큽니다")); return; }
+    setBackupBusy(true);
+    try {
+      const parsed = JSON.parse(await file.text()) as Partial<BoardBackup>;
+      if (parsed.version !== 1 || parsed.product !== "Questdeck" || !Array.isArray(parsed.cards) || !parsed.cards.every(card => card && typeof card.id === "number" && typeof card.title === "string" && productionStages.includes(card.status))) throw new Error("Invalid backup");
+      const knownProjects = new Set(projects.map(item => item.name));
+      const restoredCards = parsed.cards.filter(card => knownProjects.has(card.project));
+      const skipped = parsed.cards.length - restoredCards.length;
+      const existingIds = new Set(cards.map(card => card.id));
+      const merged = new Map(cards.map(card => [card.id, card]));
+      restoredCards.forEach(card => merged.set(card.id, card));
+      setCards(Array.from(merged.values()));
+      const restoredTodos = parsed.subTodos && typeof parsed.subTodos === "object" ? parsed.subTodos : {};
+      setSubTodos(current => ({ ...current, ...restoredTodos }));
+      if (parsed.columnNames && typeof parsed.columnNames === "object") setColumnNames(parsed.columnNames);
+      if (session?.access_token) {
+        await Promise.all(restoredCards.map(async card => {
+          await syncQuestdeck(existingIds.has(card.id) ? "update_card" : "create_card", { card }, session.access_token!);
+          const items = restoredTodos[card.id];
+          if (Array.isArray(items)) await syncQuestdeck("replace_subtasks", { cardId: card.id, items }, session.access_token!);
+        }));
+      }
+      setBackupOpen(false);
+      setToast(skipped ? tr(`Restored ${restoredCards.length} cards; skipped ${skipped} from missing projects`, `${restoredCards.length}개 복원, 없는 프로젝트의 ${skipped}개 건너뜀`) : tr(`Restored ${restoredCards.length} cards`, `${restoredCards.length}개 카드를 복원했습니다`));
+    } catch {
+      setToast(tr("That file is not a valid Questdeck board backup", "올바른 Questdeck 보드 백업 파일이 아닙니다"));
+    } finally {
+      setBackupBusy(false);
+    }
   }
 
   function openCreateCard(status: Status = "Ready") {
@@ -1537,11 +1631,16 @@ export default function Home() {
       {view === "activity" && <div className="content activity-content"><div className="page-title"><div><p>{tr("WORKSPACE PULSE", "워크스페이스 소식")}</p><h1>{tr("Activity", "활동")}</h1><h2>{tr("Every meaningful change across your studio, in one timeline.", "스튜디오의 모든 주요 변경 사항을 한 타임라인에서 확인하세요.")}</h2></div><div className="activity-actions"><select value={activityFilter} onChange={event => setActivityFilter(event.target.value)} aria-label={tr("Filter activity", "활동 필터")}><option value="All activity">{tr("All activity", "모든 활동")}</option><option value="Cards">{tr("Cards", "카드")}</option><option value="Comments">{tr("Comments", "댓글")}</option><option value="Milestones">{tr("Milestones", "마일스톤")}</option><option value="Team">{tr("Team", "팀")}</option></select><button className="secondary-button" onClick={() => setToast(tr("Activity marked as reviewed", "모든 활동을 확인했습니다"))}>{tr("Mark all reviewed", "모두 확인")}</button></div></div><div className="activity-layout"><section className="management-card activity-feed"><header><div><small>{tr("RECENT CHANGES", "최근 변경")}</small><h3>{visibleActivity.length} {tr("events", "개 활동")}</h3></div><span className="live-indicator"><i /> {tr("Live", "실시간")}</span></header><div className="activity-day"><span>{tr("TODAY", "오늘")}</span></div>{visibleActivity.slice(0,4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}{visibleActivity.length > 4 && <><div className="activity-day"><span>{tr("YESTERDAY", "어제")}</span></div>{visibleActivity.slice(4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}</>}</section><aside className="activity-summary"><section className="management-card"><small>{tr("THIS WEEK", "이번 주")}</small><div className="summary-stat"><strong>42</strong><span>{tr("Cards updated", "카드 업데이트")}</span></div><div className="summary-stat"><strong>18</strong><span>{tr("Completed", "완료")}</span></div><div className="summary-stat"><strong>27</strong><span>{tr("Comments", "댓글")}</span></div></section><section className="management-card contributors"><small>{tr("TOP CONTRIBUTORS", "주요 기여자")}</small>{initialMembers.slice(1,4).map((member,index) => <div key={member.id}><span className="member-avatar">{member.initials}</span><p><b>{member.name}</b><small>{12-index*3} {tr("updates", "개 업데이트")}</small></p><strong>#{index+1}</strong></div>)}</section></aside></div></div>}
 
       {view === "quests" && <div className="content board-content">
-        <div className="page-title"><div><p>{tr("PRODUCTION", "프로덕션")}</p><h1>{tr("Production board", "프로덕션 보드")}</h1><h2>{tr("Move every quest from idea to shipped.", "모든 퀘스트를 아이디어에서 출시까지 진행하세요.")}</h2></div><div className="board-actions"><select value={project} onChange={e => setProject(e.target.value)} aria-label={tr("Filter by project", "프로젝트 필터")}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select><select value={priorityFilter} onChange={event => setPriorityFilter(event.target.value as typeof priorityFilter)} aria-label={tr("Filter by priority", "우선순위 필터")}><option value="All">{tr("All priorities", "모든 우선순위")}</option><option value="Critical">{tr("Critical · 8–10", "긴급 · 8–10")}</option><option value="High">{tr("High · 5–7", "높음 · 5–7")}</option><option value="Normal">{tr("Normal · 1–4", "보통 · 1–4")}</option></select><select value={boardSort} onChange={event => setBoardSort(event.target.value as typeof boardSort)} aria-label={tr("Sort cards", "카드 정렬")}><option value="Default">{tr("Default order", "기본 순서")}</option><option value="Priority">{tr("Priority: high first", "우선순위 높은 순")}</option><option value="Due date">{tr("Due date", "마감일")}</option><option value="Effort">{tr("Effort: high first", "작업량 높은 순")}</option></select><button className="archived-folder-button" onClick={() => setArchiveOpen(true)}>▣ {tr("Archived", "보관함")} <b>{archivedCards.length}</b></button><button onClick={() => { setProject("All projects"); setPriorityFilter("All"); setBoardSort("Default"); setQuery(""); }}>{tr("Clear filters", "필터 초기화")}</button></div></div>
-        <div className="board">
+        <div className="page-title board-page-title"><div><p>{tr("PRODUCTION", "프로덕션")}</p><h1>{tr("Production board", "프로덕션 보드")}</h1><h2>{tr("Move every quest from idea to shipped.", "모든 퀘스트를 아이디어에서 출시까지 진행하세요.")}</h2></div><div className="board-header-actions"><button className="secondary-button" onClick={() => setBackupOpen(true)}>⇩ {tr("Backup", "백업")}</button><button className="create-button" onClick={() => openCreateCard()}>＋ {tr("New card", "새 카드")}</button></div></div>
+        <section className="board-toolbar" aria-label={tr("Board filters and view options", "보드 필터 및 보기 옵션")}>
+          <div className="board-toolbar-primary"><button className={`filter-toggle ${filtersOpen ? "active" : ""}`} onClick={() => setFiltersOpen(open => !open)}>⌁ {tr("Filters", "필터")} <b>{[project !== "All projects", priorityFilter !== "All", ownerFilter !== "All", disciplineFilter !== "All", dueFilter !== "All", Boolean(query)].filter(Boolean).length}</b></button><label><span>{tr("Sort", "정렬")}</span><select value={boardSort} onChange={event => setBoardSort(event.target.value as BoardSort)} aria-label={tr("Sort cards", "카드 정렬")}><option value="Default">{tr("Oldest added", "추가된 순")}</option><option value="Newest">{tr("Newest added", "최근 추가 순")}</option><option value="Priority">{tr("Priority: high first", "우선순위 높은 순")}</option><option value="Priority low">{tr("Priority: low first", "우선순위 낮은 순")}</option><option value="Due date">{tr("Due: soonest first", "마감 빠른 순")}</option><option value="Due date latest">{tr("Due: latest first", "마감 늦은 순")}</option><option value="Effort">{tr("Effort: high first", "작업량 높은 순")}</option><option value="Effort low">{tr("Effort: low first", "작업량 낮은 순")}</option><option value="Title">{tr("Title: A–Z", "제목: 가나다순")}</option></select></label><div className="density-control" role="group" aria-label={tr("Card density", "카드 밀도")}><button className={boardDensity === "comfortable" ? "active" : ""} onClick={() => setBoardDensity("comfortable")} aria-label={tr("Comfortable cards", "여유로운 카드")}>▤</button><button className={boardDensity === "compact" ? "active" : ""} onClick={() => setBoardDensity("compact")} aria-label={tr("Compact cards", "간결한 카드")}>☷</button></div><span className="board-result-count"><b>{filtered.length}</b> {tr(filtered.length === 1 ? "card" : "cards", "개 카드")}</span></div>
+          {filtersOpen && <div className="board-filter-row"><label>{tr("Project", "프로젝트")}<select value={project} onChange={e => setProject(e.target.value)}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select></label><label>{tr("Priority", "우선순위")}<select value={priorityFilter} onChange={event => setPriorityFilter(event.target.value as typeof priorityFilter)}><option value="All">{tr("Any priority", "모든 우선순위")}</option><option value="Critical">{tr("Critical · 8–10", "긴급 · 8–10")}</option><option value="High">{tr("High · 5–7", "높음 · 5–7")}</option><option value="Normal">{tr("Normal · 1–4", "보통 · 1–4")}</option></select></label><label>{tr("Owner", "담당자")}<select value={ownerFilter} onChange={event => setOwnerFilter(event.target.value)}><option value="All">{tr("Any owner", "모든 담당자")}</option>{activeCardOwners.map(member => <option value={member.initials} key={member.id}>{member.name}</option>)}</select></label><label>{tr("Discipline", "분야")}<select value={disciplineFilter} onChange={event => setDisciplineFilter(event.target.value)}><option value="All">{tr("Any discipline", "모든 분야")}</option>{productionDisciplines.map(item => <option value={item.name} key={item.id}>{item.name}</option>)}</select></label><label>{tr("Due", "마감")}<select value={dueFilter} onChange={event => setDueFilter(event.target.value as typeof dueFilter)}><option value="All">{tr("Any date", "모든 날짜")}</option><option value="Overdue">{tr("Overdue", "기한 지남")}</option><option value="Today">{tr("Due today", "오늘 마감")}</option><option value="This week">{tr("Next 7 days", "7일 이내")}</option><option value="No date">{tr("No due date", "마감일 없음")}</option></select></label><button onClick={() => { setProject("All projects"); setPriorityFilter("All"); setOwnerFilter("All"); setDisciplineFilter("All"); setDueFilter("All"); setBoardSort("Default"); setQuery(""); }}>{tr("Reset", "초기화")}</button><button className="archived-folder-button" onClick={() => setArchiveOpen(true)}>▣ {tr("Archived", "보관함")} <b>{archivedCards.length}</b></button></div>}
+        </section>
+        <div className={`board board-density-${boardDensity}`}>
           {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className={`board-column ${boardDropStatus === status ? "board-drop-target" : ""}`} key={status} onDragEnter={event => { event.preventDefault(); if (draggedBoardCard) { setBoardDropStatus(status); setBoardDropAction(null); } }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (draggedBoardCard) { setBoardDropStatus(status); setBoardDropAction(null); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBoardDropStatus(current => current === status ? null : current); }} onDrop={event => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-board-card") || draggedBoardCard); if (cardId) void moveBoardCard(cardId, status); }}>
             <header><span className={`status-dot s${index}`}/><h3>{columnNames[status] || statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><div className="column-menu-wrap"><button className={`column-menu-trigger ${activeColumnMenu === status ? "active" : ""}`} onClick={() => setActiveColumnMenu(current => current === status ? null : status)} aria-label={`${columnNames[status] || statusLabel(status)} ${tr("options", "옵션")}`} aria-expanded={activeColumnMenu === status}>•••</button>{activeColumnMenu === status && <div className="column-menu" role="menu"><button role="menuitem" onClick={() => openCreateCard(status)}>＋ <span>{tr("Add card here", "여기에 카드 추가")}</span></button><button role="menuitem" onClick={() => { setEditColumn(status); setActiveColumnMenu(null); }}>✎ <span>{tr("Rename column", "열 이름 변경")}</span></button>{columnNames[status] && <button role="menuitem" onClick={() => resetColumnName(status)}>↺ <span>{tr("Reset name", "기본 이름 복원")}</span></button>}</div>}</div></header>
-            <div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact draggable dragging={draggedBoardCard === card.id} onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-board-card", String(card.id)); setDraggedBoardCard(card.id); setBoardDropStatus(status); setBoardDropAction(null); }} onDragEnd={() => { setDraggedBoardCard(null); setBoardDropStatus(null); setBoardDropAction(null); }} todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}<button className="add-inline" onClick={() => openCreateCard(status)}>＋ {tr("Add a card", "카드 추가")}</button></div>
+            <form className="quick-card-form" onSubmit={event => quickAddCard(event, status)}><span>＋</span><input value={quickCardTitles[status] ?? ""} onChange={event => setQuickCardTitles(current => ({ ...current, [status]: event.target.value }))} placeholder={tr("Quick add a card…", "빠르게 카드 추가…")} aria-label={tr(`Quick add to ${statusLabel(status)}`, `${statusLabel(status)}에 빠른 카드 추가`)} maxLength={120}/><button type="submit" disabled={!quickCardTitles[status]?.trim()}>{tr("Add", "추가")}</button></form>
+            <div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact={boardDensity === "compact"} draggable dragging={draggedBoardCard === card.id} onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-board-card", String(card.id)); setDraggedBoardCard(card.id); setBoardDropStatus(status); setBoardDropAction(null); }} onDragEnd={() => { setDraggedBoardCard(null); setBoardDropStatus(null); setBoardDropAction(null); }} todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}</div>
             {boardDropStatus === status && draggedBoardCard && <div className="board-drop-hint">{tr(`Drop in ${statusLabel(status)}`, `${statusLabel(status)}에 놓기`)}</div>}
           </section>)}
         </div>
@@ -1650,6 +1749,7 @@ export default function Home() {
     {editProject && <div className="modal-backdrop" onMouseDown={() => setEditProject(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit project", "프로젝트 수정")}><header><div><small>{tr("PROJECT SETTINGS", "프로젝트 설정")}</small><h2>{tr("Edit project", "프로젝트 수정")}</h2></div><button onClick={() => setEditProject(null)} aria-label="Close">×</button></header><form onSubmit={saveProjectEdits}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus defaultValue={editProject.name} /></label><div className="form-row"><label>{tr("Project lead", "프로젝트 리드")}<select name="owner" defaultValue={editProject.owner}>{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editProject.status}><option>Active</option><option>On hold</option><option>Archived</option></select></label></div><div className="form-row"><label>{tr("Progress", "진행률")}<input name="progress" type="number" min="0" max="100" defaultValue={editProject.progress} /></label><label>{tr("Color", "색상")}<select name="color" defaultValue={editProject.color}><option value="purple">Purple</option><option value="yellow">Yellow</option><option value="blue">Blue</option></select></label></div><footer><button type="button" onClick={() => setEditProject(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save project", "프로젝트 저장")}</button></footer></form></section></div>}
 
     {archiveOpen && <div className="modal-backdrop" onMouseDown={() => setArchiveOpen(false)}><section className="modal create-modal archive-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Archived cards", "보관된 카드")}><header><div><small>{tr("RECOVERABLE FOLDER", "복원 가능한 보관함")}</small><h2>{tr("Archived cards", "보관된 카드")} <span>{archivedCards.length}</span></h2></div><button onClick={() => setArchiveOpen(false)} aria-label="Close">×</button></header><p className="archive-help">{tr("Archived cards stay out of the board, timeline, totals, and milestones until you restore them.", "보관된 카드는 복원할 때까지 보드, 타임라인, 집계 및 마일스톤에서 제외됩니다.")}</p><div className="archive-card-list">{archivedCards.map(card => <article key={card.id}><i className={card.color}/><div><small>{card.project} · {statusLabel(card.status)}</small><b>{card.title}</b><span>{card.tag} · {tr("Due", "마감")} {card.due}</span></div><button className="archive-restore-button" onClick={() => void setCardArchived(card, false)}>↺ {tr("Restore", "복원")}</button><button className="archive-delete-button" onClick={() => void deleteCard(card)} aria-label={tr(`Delete ${card.title}`, `${card.title} 삭제`)}>×</button></article>)}{archivedCards.length === 0 && <div className="archive-empty"><span>▣</span><b>{tr("Your archive is empty", "보관함이 비어 있습니다")}</b><p>{tr("Drag a board card to Archive and it will appear here.", "보드 카드를 보관 영역으로 끌면 여기에 표시됩니다.")}</p></div>}</div></section></div>}
+    {backupOpen && <div className="modal-backdrop" onMouseDown={() => setBackupOpen(false)}><section className="modal create-modal backup-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Board backup", "보드 백업")}><header><div><small>{tr("BOARD SAFETY", "보드 안전 관리")}</small><h2>{tr("Backup & restore", "백업 및 복원")}</h2></div><button onClick={() => setBackupOpen(false)} aria-label="Close">×</button></header><p>{tr("Keep a portable copy of every active and archived card, its sub-tasks, and your column names.", "활성 및 보관 카드, 하위 작업, 열 이름을 휴대 가능한 파일로 보관하세요.")}</p><div className="backup-options"><article><span>⇩</span><div><b>{tr("Download a backup", "백업 다운로드")}</b><small>{tr(`${cards.length} cards · saved as a JSON file`, `${cards.length}개 카드 · JSON 파일로 저장`)}</small></div><button className="create-button" onClick={downloadBoardBackup}>{tr("Download", "다운로드")}</button></article><article><span>↺</span><div><b>{tr("Restore from a backup", "백업에서 복원")}</b><small>{tr("Merges cards by ID and keeps cards created since the backup.", "카드 ID로 병합하며 백업 이후 만든 카드도 유지합니다.")}</small></div><button className="secondary-button" disabled={backupBusy} onClick={() => backupInputRef.current?.click()}>{backupBusy ? tr("Restoring…", "복원 중…") : tr("Choose file", "파일 선택")}</button><input ref={backupInputRef} type="file" accept="application/json,.json" onChange={event => void restoreBoardBackup(event)} /></article></div><footer><small>✓ {tr("Restore never deletes newer cards", "복원 시 새 카드를 삭제하지 않습니다")}</small><button onClick={() => setBackupOpen(false)}>{tr("Done", "완료")}</button></footer></section></div>}
 
     {milestoneEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}><section className="modal create-modal milestone-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("Create milestone", "마일스톤 만들기")}><header><div><small>{tr("ROADMAP TARGET", "로드맵 목표")}</small><h2>{editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("New milestone", "새 마일스톤")}</h2></div><button onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }} aria-label="Close">×</button></header><form onSubmit={saveMilestone}><label>{tr("Milestone title", "마일스톤 제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingMilestone?.title ?? ""} placeholder={tr("What are you shipping?", "어떤 목표를 출시하나요?")} /></label><div className="form-row"><label>{tr("Target date", "목표 날짜")}<input name="milestoneDate" type="date" required value={milestoneDraftDate} onChange={event => setMilestoneDraftDate(event.target.value)} /></label><label>{tr("Stage", "단계")}<select name="stage" defaultValue={editingMilestone?.stage ?? "UP NEXT"}><option>UP NEXT</option><option>PRODUCTION</option><option>REVIEW</option><option>RELEASE</option><option>COMPLETE</option></select></label></div><label>{tr("Description", "설명")}<textarea name="note" maxLength={1000} defaultValue={editingMilestone?.note ?? ""} placeholder={tr("Define the delivery target and success criteria…", "출시 목표와 성공 조건을 입력하세요…")} /></label><section className="milestone-auto-panel" aria-live="polite"><header><span>✦</span><div><b>{tr("Automatic progress", "자동 진행률")}</b><small>{tr("Active-project cards due by this target date", "이 목표일까지 마감되는 활성 프로젝트 카드")}</small></div></header><div><article><small>{tr("PROGRESS", "진행률")}</small><b>{milestoneDraftStats.progress}%</b></article><article><small>{tr("COMPLETED", "완료")}</small><b>{milestoneDraftStats.completedCards}</b></article><article><small>{tr("TOTAL CARDS", "전체 카드")}</small><b>{milestoneDraftStats.totalCards}</b></article></div><p>{milestoneDraftStats.unscheduledCards > 0 ? tr(`${milestoneDraftStats.unscheduledCards} cards without a due date are not included.`, `마감일이 없는 카드 ${milestoneDraftStats.unscheduledCards}개는 포함되지 않습니다.`) : tr("Every active card has a due date and is eligible for tracking.", "모든 활성 카드에 마감일이 있어 자동 추적할 수 있습니다.")}</p></section><label>{tr("Color", "색상")}<select name="color" defaultValue={editingMilestone?.color ?? "violet"}><option value="violet">{tr("Violet", "보라")}</option><option value="mint">{tr("Mint", "민트")}</option><option value="coral">{tr("Coral", "코랄")}</option></select></label><footer className="milestone-editor-footer">{editingMilestone ? <button className="danger-button" type="button" onClick={() => void deleteMilestone(editingMilestone)}>{tr("Delete milestone", "마일스톤 삭제")}</button> : <span />}<div><button type="button" onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{editingMilestone ? tr("Save changes", "변경 저장") : tr("Create milestone", "마일스톤 만들기")}</button></div></footer></form></section></div>}
 
