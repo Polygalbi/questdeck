@@ -13,17 +13,18 @@ type RolePermissions = Record<PermissionKey, boolean>;
 type RoleDefinition = { name: RoleName; description: string; color: string; permissions: RolePermissions };
 type Member = { id: number; name: string; email: string; initials: string; role: RoleName; discipline: string; status: "Active" | "Invited" };
 type Workspace = { id: string; name: string; initials: string; members: number; status: "Active" | "Archived" };
-type Notification = { id: number; title: string; detail: string; time: string; icon: string; tone: string; read: boolean; destination: View };
+type Notification = { id: number; title: string; detail: string; time: string; icon: string; tone: string; read: boolean; destination: View; createdAt?: string };
+type ActivityEvent = { id: number; person: string; initials: string; action: string; target: string; detail: string; project: string; type: string; time: string; tone: string; destination: View; createdAt: string };
 type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
 type SubTodo = { id: number; text: string; done: boolean };
 type ProductionDiscipline = { id: number; name: string; color: string };
 type WorkspaceDocument = { id: number; title: string; content: string; createdByEmail: string; ownerName: string; isPublished: boolean; shareSlug: string; createdAt: string; updatedAt: string };
 type DocumentComment = { id: number; documentId: number; userId: string; authorEmail: string; authorName: string; body: string; createdAt: string };
-type Milestone = { id: number; title: string; milestoneDate: string; progress: number; completedCards: number; totalCards: number; note: string; color: "violet" | "mint" | "coral"; stage: string };
+type Milestone = { id: number; title: string; milestoneDate: string; progress: number; completedCards: number; totalCards: number; note: string; color: "violet" | "mint" | "coral" | "blue" | "amber" | "rose"; stage: string };
 type BoardSort = "Default" | "Priority" | "Priority low" | "Due date" | "Due date latest" | "Effort" | "Effort low" | "Title" | "Newest";
 type BoardBackup = { version: 1; product: "Questdeck"; createdAt: string; cards: Card[]; subTodos: Record<number, SubTodo[]>; columnNames: Partial<Record<Status, string>> };
 type WorkspaceBackupAttachment = { path: string; mimeType: string; dataUrl: string };
-type WorkspaceBackup = { version: 2; product: "Questdeck"; kind: "full-workspace"; createdAt: string; workspace: { cards: Card[]; subTodos: Record<number, SubTodo[]>; projects: Project[]; milestones: Milestone[]; productionDisciplines: ProductionDiscipline[]; members: Member[]; roleDefinitions: RoleDefinition[]; workspaces: Workspace[]; activeWorkspaceId: string; settings: { studioName: string; weeklyDigest: boolean; defaultProjectId: string; language: "en" | "ko" }; documents: WorkspaceDocument[]; documentComments: DocumentComment[]; notifications: Notification[]; columnNames: Partial<Record<Status, string>> }; attachments: WorkspaceBackupAttachment[] };
+type WorkspaceBackup = { version: 2; product: "Questdeck"; kind: "full-workspace"; createdAt: string; workspace: { cards: Card[]; subTodos: Record<number, SubTodo[]>; projects: Project[]; milestones: Milestone[]; productionDisciplines: ProductionDiscipline[]; members: Member[]; roleDefinitions: RoleDefinition[]; workspaces: Workspace[]; activeWorkspaceId: string; settings: { studioName: string; weeklyDigest: boolean; defaultProjectId: string; language: "en" | "ko" }; documents: WorkspaceDocument[]; documentComments: DocumentComment[]; notifications: Notification[]; activityEvents: ActivityEvent[]; columnNames: Partial<Record<Status, string>> }; attachments: WorkspaceBackupAttachment[] };
 type CardHoverPreview = { card: Card; left: number; top: number; completed: number; total: number };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
@@ -155,12 +156,7 @@ const initialWorkspaces: Workspace[] = [
   { id: "nightfall", name: "Nightfall Strike Team", initials: "NS", members: 3, status: "Active" },
 ];
 
-const initialNotifications: Notification[] = [
-  { id: 1, title: "Boss arena is ready for review", detail: "Alex moved the concept card to Review.", time: "18m", icon: "AS", tone: "coral", read: false, destination: "quests" },
-  { id: 2, title: "Festival demo is 12 days away", detail: "16 cards remain before the milestone.", time: "1h", icon: "◆", tone: "violet", read: false, destination: "milestones" },
-  { id: 3, title: "New comment on movement tuning", detail: "Mina mentioned you in a playtest note.", time: "2h", icon: "MK", tone: "mint", read: false, destination: "quests" },
-  { id: 4, title: "Cave reverb zones completed", detail: "Jules finished an Audio card.", time: "Yesterday", icon: "JL", tone: "blue-card", read: true, destination: "overview" },
-];
+const initialNotifications: Notification[] = [];
 
 const initialRoleDefinitions: RoleDefinition[] = [
   { name: "Owner", description: "Full workspace control, billing, and security.", color: "violet", permissions: { view_projects: true, edit_cards: true, manage_members: true, workspace_settings: true, billing_security: true } },
@@ -177,14 +173,20 @@ const permissionRows: { key: PermissionKey; english: string; korean: string }[] 
   { key: "billing_security", english: "Billing & security", korean: "결제 및 보안" },
 ];
 
-const activityEvents = [
-  { id: 1, person: "Alex Santos", initials: "AS", action: "moved", target: "Boss arena concept", detail: "In progress → Review", project: "Project Nightfall", type: "Cards", time: "18 minutes ago", tone: "coral" },
-  { id: 2, person: "Jules Lee", initials: "JL", action: "completed", target: "Cave reverb zones", detail: "Card completed", project: "Project Nightfall", type: "Cards", time: "42 minutes ago", tone: "mint" },
-  { id: 3, person: "Mina Kwon", initials: "MK", action: "commented on", target: "Tune player movement", detail: "“The latest build feels much sharper.”", project: "Project Nightfall", type: "Comments", time: "1 hour ago", tone: "violet" },
-  { id: 4, person: "Jamie Kim", initials: "JK", action: "updated milestone", target: "Festival demo", detail: "Progress increased from 62% to 68%", project: "Project Nightfall", type: "Milestones", time: "3 hours ago", tone: "amber-card" },
-  { id: 5, person: "Noah Kim", initials: "NK", action: "created", target: "Controller remapping", detail: "Assigned to Engineering · 5 points", project: "Project Nightfall", type: "Cards", time: "Yesterday", tone: "blue-card" },
-  { id: 6, person: "Jamie Kim", initials: "JK", action: "invited", target: "Robin Park", detail: "Member access · Marketing", project: "Marketing", type: "Team", time: "Yesterday", tone: "violet" },
-];
+const initialActivityEvents: ActivityEvent[] = [];
+
+function isView(value: string): value is View {
+  return ["overview", "quests", "timeline", "documents", "milestones", "activity", "management", "projects-management", "roles", "account"].includes(value);
+}
+
+function relativeTime(value: string) {
+  const elapsed = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(elapsed) || elapsed < 60_000) return "Just now";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h`;
+  const days = Math.floor(elapsed / 86_400_000);
+  return days === 1 ? "Yesterday" : `${days}d`;
+}
 
 const initialSubTodos: Record<number, SubTodo[]> = {
   1: [{ id: 101, text: "Verify keyboard controls", done: true }, { id: 102, text: "Test with controller", done: true }, { id: 103, text: "Capture playtest notes", done: false }],
@@ -305,7 +307,9 @@ export default function Home() {
   const [editingDiscipline, setEditingDiscipline] = useState<string | null>(null);
   const [editedDiscipline, setEditedDiscipline] = useState("");
   const [notifications, setNotifications] = useState<Notification[]>(initialNotifications);
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>(initialActivityEvents);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [notificationFilter, setNotificationFilter] = useState<"All" | "Unread">("All");
   const [workspaces, setWorkspaces] = useState<Workspace[]>(initialWorkspaces);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("starfall");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -343,6 +347,39 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
+
+  async function loadWorkspaceFeed(accessToken = session?.access_token) {
+    if (!accessToken) return;
+    const data = await syncQuestdeck<{
+      activity: Array<{ id: number; actor_name: string; actor_email: string; actor_initials: string; action: string; target: string; detail: string; project: string; event_type: string; tone: string; destination: string; created_at: string }>;
+      notifications: Array<{ id: number; title: string; detail: string; icon: string; tone: string; destination: string; is_read: boolean; created_at: string }>;
+    }>("load_feed", {}, accessToken);
+    setActivityEvents(data.activity.map(item => ({
+      id: item.id,
+      person: item.actor_name,
+      initials: item.actor_initials || "Q",
+      action: item.action,
+      target: item.target,
+      detail: item.detail,
+      project: item.project,
+      type: item.event_type,
+      time: relativeTime(item.created_at),
+      tone: item.tone,
+      destination: isView(item.destination) ? item.destination : "overview",
+      createdAt: item.created_at,
+    })));
+    setNotifications(data.notifications.map(item => ({
+      id: item.id,
+      title: item.title,
+      detail: item.detail,
+      time: relativeTime(item.created_at),
+      icon: item.icon || "Q",
+      tone: item.tone,
+      read: item.is_read,
+      destination: isView(item.destination) ? item.destination : "overview",
+      createdAt: item.created_at,
+    })));
+  }
 
   useEffect(() => {
     const headers = { apikey: SUPABASE_PUBLISHABLE_KEY };
@@ -392,6 +429,8 @@ export default function Home() {
     if (!session?.access_token) {
       setCurrentPermissions(null);
       setDocuments([]);
+      setActivityEvents([]);
+      setNotifications([]);
       return;
     }
     void syncQuestdeck<{
@@ -411,6 +450,12 @@ export default function Home() {
       }));
       setCurrentPermissions(data.permissions);
     }).catch(error => setToast(error instanceof Error ? error.message : tr("Could not load workspace access", "워크스페이스 권한을 불러오지 못했습니다")));
+  }, [session?.access_token]);
+  useEffect(() => {
+    if (!session?.access_token) return;
+    void loadWorkspaceFeed(session.access_token).catch(() => undefined);
+    const timer = window.setInterval(() => void loadWorkspaceFeed(session.access_token).catch(() => undefined), 20_000);
+    return () => window.clearInterval(timer);
   }, [session?.access_token]);
   useEffect(() => {
     if (!session?.access_token) return;
@@ -448,7 +493,6 @@ export default function Home() {
     const savedMembers = window.localStorage.getItem("questdeck-members");
     const savedSettings = window.localStorage.getItem("questdeck-workspace-settings");
     const savedWorkspaces = window.localStorage.getItem("questdeck-workspaces");
-    const savedNotifications = window.localStorage.getItem("questdeck-notifications");
     const savedProjects = window.localStorage.getItem("questdeck-projects");
     const savedDisciplines = window.localStorage.getItem("questdeck-disciplines");
     const savedLanguage = window.localStorage.getItem("questdeck-language");
@@ -459,7 +503,6 @@ export default function Home() {
     if (savedMembers) { try { setMembers(JSON.parse(savedMembers)); } catch {} }
     if (savedSettings) { try { const parsed = JSON.parse(savedSettings); setStudioName(parsed.studioName ?? "Starfall Studio"); setWeeklyDigest(parsed.weeklyDigest ?? true); setDefaultProjectId(parsed.defaultProjectId ?? "nightfall"); } catch {} }
     if (savedWorkspaces) { try { const parsed = JSON.parse(savedWorkspaces); setWorkspaces((parsed.workspaces ?? initialWorkspaces).map((workspace: Workspace) => ({ ...workspace, status: workspace.status ?? "Active" }))); setActiveWorkspaceId(parsed.activeWorkspaceId ?? "starfall"); } catch {} }
-    if (savedNotifications) { try { setNotifications(JSON.parse(savedNotifications)); } catch {} }
     if (savedProjects) { try { setProjects(JSON.parse(savedProjects)); } catch {} }
     if (savedDisciplines) { try { const parsed = JSON.parse(savedDisciplines); if (Array.isArray(parsed) && parsed.length) setDisciplines(parsed); } catch {} }
     if (savedLanguage === "ko" || savedLanguage === "en") setLanguage(savedLanguage);
@@ -618,7 +661,7 @@ export default function Home() {
         product: "Questdeck",
         kind: "full-workspace",
         createdAt: new Date().toISOString(),
-        workspace: { cards, subTodos, projects, milestones, productionDisciplines, members, roleDefinitions, workspaces, activeWorkspaceId, settings: { studioName, weeklyDigest, defaultProjectId, language }, documents, documentComments: allDocumentComments, notifications, columnNames },
+        workspace: { cards, subTodos, projects, milestones, productionDisciplines, members, roleDefinitions, workspaces, activeWorkspaceId, settings: { studioName, weeklyDigest, defaultProjectId, language }, documents, documentComments: allDocumentComments, notifications, activityEvents, columnNames },
         attachments,
       };
       const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
@@ -789,8 +832,14 @@ export default function Home() {
 
   function openNotification(item: Notification) {
     setNotifications(current => current.map(notification => notification.id === item.id ? { ...notification, read: true } : notification));
+    if (session?.access_token) void syncQuestdeck("mark_notification_read", { notificationId: item.id }, session.access_token).catch(() => undefined);
     setNotificationOpen(false);
     setView(item.destination);
+  }
+
+  function markAllNotificationsRead() {
+    setNotifications(current => current.map(item => ({ ...item, read: true })));
+    if (session?.access_token) void syncQuestdeck("mark_all_notifications_read", {}, session.access_token).catch(() => undefined);
   }
 
   function switchWorkspace(workspace: Workspace) {
@@ -1461,6 +1510,7 @@ export default function Home() {
       setMilestones(current => editingMilestone ? current.map(item => item.id === saved.id ? saved : item) : [...current, saved]);
       setMilestoneEditorOpen(false);
       setEditingMilestone(null);
+      void loadWorkspaceFeed(accessToken).catch(() => undefined);
       setToast(editingMilestone ? tr("Milestone updated", "마일스톤을 수정했습니다") : tr("Milestone created", "마일스톤을 만들었습니다"));
     } catch (error) {
       setToast(error instanceof Error ? error.message : tr("Could not save milestone", "마일스톤을 저장하지 못했습니다"));
@@ -1476,6 +1526,7 @@ export default function Home() {
       setMilestones(current => current.filter(item => item.id !== milestone.id));
       setMilestoneEditorOpen(false);
       setEditingMilestone(null);
+      void loadWorkspaceFeed(accessToken).catch(() => undefined);
       setToast(tr("Milestone deleted", "마일스톤을 삭제했습니다"));
     } catch (error) {
       setToast(error instanceof Error ? error.message : tr("Could not delete milestone", "마일스톤을 삭제하지 못했습니다"));
@@ -1543,9 +1594,21 @@ export default function Home() {
     }, 900);
   }
   const unreadCount = notifications.filter(notification => !notification.read).length;
+  const visibleNotifications = notifications.filter(notification => notificationFilter === "All" || !notification.read);
   const visibleProjects = projects.filter(item => (projectStatusFilter === "All" || item.status === projectStatusFilter) && `${item.name} ${item.owner}`.toLowerCase().includes(projectSearch.toLowerCase()));
   const visibleMembers = members.filter(member => memberRoleFilter === "All" || member.role === memberRoleFilter);
-  const visibleActivity = activityEvents.filter(item => activeProjectNames.has(item.project) && (activityFilter === "All activity" || item.type === activityFilter));
+  const visibleActivity = activityEvents.filter(item => activityFilter === "All activity" || item.type === activityFilter);
+  const weekStart = Date.now() - 7 * dayMs;
+  const weeklyActivity = activityEvents.filter(item => new Date(item.createdAt).getTime() >= weekStart);
+  const weeklyCardUpdates = weeklyActivity.filter(item => item.type === "Cards").length;
+  const weeklyCompleted = weeklyActivity.filter(item => /completed|done/i.test(`${item.action} ${item.detail}`)).length;
+  const weeklyMilestones = weeklyActivity.filter(item => item.type === "Milestones").length;
+  const contributorCounts = Array.from(weeklyActivity.reduce<Map<string, { person: string; initials: string; count: number }>>((all, item) => {
+    const current = all.get(item.person) ?? { person: item.person, initials: item.initials, count: 0 };
+    current.count += 1;
+    all.set(item.person, current);
+    return all;
+  }, new Map()).values()).sort((a, b) => b.count - a.count).slice(0, 3);
   const tr = (english: string, korean: string) => language === "ko" ? korean : english;
   const statusLabel = (status: Status | Project["status"]) => ({ Ready: tr("Ready", "준비"), "In progress": tr("In progress", "진행 중"), Review: tr("Review", "검토"), Done: tr("Done", "완료"), Active: tr("Active", "활성"), "On hold": tr("On hold", "보류"), Archived: tr("Archived", "보관됨") }[status]);
   const selectedTodos = selected ? (subTodos[selected.id] ?? []) : [];
@@ -1677,7 +1740,7 @@ export default function Home() {
           <span className={`mobile-data-source ${dataSource}`}><i />{dataSource === "supabase" ? tr("Supabase live", "Supabase 연결됨") : dataSource === "local" ? tr("Local mode", "로컬 모드") : tr("Connecting", "연결 중")}</span>
           <button className={`mobile-auth-chip ${session ? "signed-in" : ""}`} onClick={() => session ? setView("account") : setAuthOpen(true)}>{session ? accountEmail : tr("Sign in", "로그인")}</button>
         </div>
-        {notificationOpen && <section className="notification-panel"><header><div><small>{tr("INBOX", "받은 알림")}</small><h3>{tr("Notifications", "알림")}</h3></div><button onClick={() => setNotifications(current => current.map(item => ({...item, read:true})))}>{tr("Mark all read", "모두 읽음")}</button></header><div className="notification-tabs"><button className="active">{tr("All", "전체")}</button><button>{tr("Mentions", "멘션")}</button><button>{tr("Assigned", "담당")}</button></div><div className="notification-list">{notifications.map(item => <button className={`notification-item ${item.read ? "read" : ""}`} key={item.id} onClick={() => openNotification(item)}><span className={`notification-avatar ${item.tone}`}>{item.icon}</span><div><b>{item.title}</b><p>{item.detail}</p><small>{item.time} {tr("ago", "전")}</small></div>{!item.read && <i />}</button>)}</div><footer><button onClick={() => { setNotificationOpen(false); setView("account"); }}>{tr("Notification settings", "알림 설정")} →</button></footer></section>}
+        {notificationOpen && <section className="notification-panel"><header><div><small>{tr("WORKSPACE INBOX", "워크스페이스 받은 알림")}</small><h3>{tr("Notifications", "알림")}</h3></div><button onClick={markAllNotificationsRead} disabled={!unreadCount}>{tr("Mark all read", "모두 읽음")}</button></header><div className="notification-tabs"><button className={notificationFilter === "All" ? "active" : ""} onClick={() => setNotificationFilter("All")}>{tr("All", "전체")}</button><button className={notificationFilter === "Unread" ? "active" : ""} onClick={() => setNotificationFilter("Unread")}>{tr("Unread", "읽지 않음")} {unreadCount > 0 && <span>{unreadCount}</span>}</button><button onClick={() => session?.access_token && void loadWorkspaceFeed(session.access_token)}>{tr("Refresh", "새로고침")}</button></div><div className="notification-list">{visibleNotifications.map(item => <button className={`notification-item ${item.read ? "read" : ""}`} key={item.id} onClick={() => openNotification(item)}><span className={`notification-avatar ${item.tone}`}>{item.icon}</span><div><b>{item.title}</b><p>{item.detail}</p><small>{item.time === "Just now" ? tr("Just now", "방금") : item.time === "Yesterday" ? tr("Yesterday", "어제") : `${item.time} ${tr("ago", "전")}`}</small></div>{!item.read && <i />}</button>)}{visibleNotifications.length === 0 && <div className="notification-empty"><span>✓</span><b>{notificationFilter === "Unread" ? tr("You're all caught up", "모든 알림을 확인했습니다") : tr("No workspace notifications yet", "아직 워크스페이스 알림이 없습니다")}</b><p>{tr("Card, milestone, project, document, and member changes will appear here.", "카드, 마일스톤, 프로젝트, 문서, 멤버 변경 사항이 여기에 표시됩니다.")}</p></div>}</div><footer><button onClick={() => { setNotificationOpen(false); setView("activity"); }}>{tr("Open workspace activity", "워크스페이스 활동 열기")} →</button></footer></section>}
       </div></header>
 
       {view === "overview" && <div className="content">
@@ -1695,7 +1758,7 @@ export default function Home() {
         </div>
       </div>}
 
-      {view === "activity" && <div className="content activity-content"><div className="page-title"><div><p>{tr("WORKSPACE PULSE", "워크스페이스 소식")}</p><h1>{tr("Activity", "활동")}</h1><h2>{tr("Every meaningful change across your studio, in one timeline.", "스튜디오의 모든 주요 변경 사항을 한 타임라인에서 확인하세요.")}</h2></div><div className="activity-actions"><select value={activityFilter} onChange={event => setActivityFilter(event.target.value)} aria-label={tr("Filter activity", "활동 필터")}><option value="All activity">{tr("All activity", "모든 활동")}</option><option value="Cards">{tr("Cards", "카드")}</option><option value="Comments">{tr("Comments", "댓글")}</option><option value="Milestones">{tr("Milestones", "마일스톤")}</option><option value="Team">{tr("Team", "팀")}</option></select><button className="secondary-button" onClick={() => setToast(tr("Activity marked as reviewed", "모든 활동을 확인했습니다"))}>{tr("Mark all reviewed", "모두 확인")}</button></div></div><div className="activity-layout"><section className="management-card activity-feed"><header><div><small>{tr("RECENT CHANGES", "최근 변경")}</small><h3>{visibleActivity.length} {tr("events", "개 활동")}</h3></div><span className="live-indicator"><i /> {tr("Live", "실시간")}</span></header><div className="activity-day"><span>{tr("TODAY", "오늘")}</span></div>{visibleActivity.slice(0,4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}{visibleActivity.length > 4 && <><div className="activity-day"><span>{tr("YESTERDAY", "어제")}</span></div>{visibleActivity.slice(4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}</>}</section><aside className="activity-summary"><section className="management-card"><small>{tr("THIS WEEK", "이번 주")}</small><div className="summary-stat"><strong>42</strong><span>{tr("Cards updated", "카드 업데이트")}</span></div><div className="summary-stat"><strong>18</strong><span>{tr("Completed", "완료")}</span></div><div className="summary-stat"><strong>27</strong><span>{tr("Comments", "댓글")}</span></div></section><section className="management-card contributors"><small>{tr("TOP CONTRIBUTORS", "주요 기여자")}</small>{initialMembers.slice(1,4).map((member,index) => <div key={member.id}><span className="member-avatar">{member.initials}</span><p><b>{member.name}</b><small>{12-index*3} {tr("updates", "개 업데이트")}</small></p><strong>#{index+1}</strong></div>)}</section></aside></div></div>}
+      {view === "activity" && <div className="content activity-content"><div className="page-title"><div><p>{tr("WORKSPACE PULSE", "워크스페이스 소식")}</p><h1>{tr("Activity", "활동")}</h1><h2>{tr("Every meaningful change across your studio, in one timeline.", "스튜디오의 모든 주요 변경 사항을 한 타임라인에서 확인하세요.")}</h2></div><div className="activity-actions"><select value={activityFilter} onChange={event => setActivityFilter(event.target.value)} aria-label={tr("Filter activity", "활동 필터")}><option value="All activity">{tr("All activity", "모든 활동")}</option><option value="Cards">{tr("Cards", "카드")}</option><option value="Milestones">{tr("Milestones", "마일스톤")}</option><option value="Projects">{tr("Projects", "프로젝트")}</option><option value="Documents">{tr("Documents", "문서")}</option><option value="Team">{tr("Team", "팀")}</option><option value="Workspace">{tr("Workspace", "워크스페이스")}</option></select><button className="secondary-button" onClick={() => session?.access_token && void loadWorkspaceFeed(session.access_token)}>{tr("Refresh activity", "활동 새로고침")}</button></div></div><div className="activity-layout"><section className="management-card activity-feed"><header><div><small>{tr("RECENT CHANGES", "최근 변경")}</small><h3>{visibleActivity.length} {tr("events", "개 활동")}</h3></div><span className="live-indicator"><i /> {tr("Synced", "동기화됨")}</span></header>{visibleActivity.length > 0 ? <><div className="activity-day"><span>{tr("LATEST", "최신")}</span></div>{visibleActivity.map(item => <article className="activity-event" key={item.id} onClick={() => setView(item.destination)}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p>{item.detail && <blockquote>{item.detail}</blockquote>}<small>{item.project} · {item.time === "Just now" ? tr("Just now", "방금") : item.time === "Yesterday" ? tr("Yesterday", "어제") : `${item.time} ${tr("ago", "전")}`}</small></div><span className="event-type">{item.type}</span><button aria-label={tr(`Open ${item.target}`, `${item.target} 열기`)}>→</button></article>)}</> : <div className="activity-empty"><span>◌</span><h3>{tr("No activity yet", "아직 활동이 없습니다")}</h3><p>{tr("New workspace changes will be recorded here automatically.", "새 워크스페이스 변경 사항이 자동으로 여기에 기록됩니다.")}</p></div>}</section><aside className="activity-summary"><section className="management-card"><small>{tr("THIS WEEK", "이번 주")}</small><div className="summary-stat"><strong>{weeklyCardUpdates}</strong><span>{tr("Card changes", "카드 변경")}</span></div><div className="summary-stat"><strong>{weeklyCompleted}</strong><span>{tr("Completed", "완료")}</span></div><div className="summary-stat"><strong>{weeklyMilestones}</strong><span>{tr("Milestone changes", "마일스톤 변경")}</span></div></section><section className="management-card contributors"><small>{tr("TOP CONTRIBUTORS", "주요 기여자")}</small>{contributorCounts.map((contributor,index) => <div key={contributor.person}><span className="member-avatar">{contributor.initials}</span><p><b>{contributor.person}</b><small>{contributor.count} {tr("updates", "개 업데이트")}</small></p><strong>#{index+1}</strong></div>)}{contributorCounts.length === 0 && <p className="contributors-empty">{tr("Contributors will appear after activity is recorded.", "활동이 기록되면 기여자가 표시됩니다.")}</p>}</section></aside></div></div>}
 
       {view === "quests" && <div className="content board-content">
         <div className="page-title board-page-title"><div><p>{tr("PRODUCTION", "프로덕션")}</p><h1>{tr("Production board", "프로덕션 보드")}</h1><h2>{tr("Move every quest from idea to shipped.", "모든 퀘스트를 아이디어에서 출시까지 진행하세요.")}</h2></div><div className="board-header-actions"><button className="secondary-button" onClick={() => setBackupOpen(true)}>⇩ {tr("Backup", "백업")}</button><button className="create-button" onClick={() => openCreateCard()}>＋ {tr("New card", "새 카드")}</button></div></div>
@@ -1818,7 +1881,7 @@ export default function Home() {
     {archiveOpen && <div className="modal-backdrop" onMouseDown={() => setArchiveOpen(false)}><section className="modal create-modal archive-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Archived cards", "보관된 카드")}><header><div><small>{tr("RECOVERABLE FOLDER", "복원 가능한 보관함")}</small><h2>{tr("Archived cards", "보관된 카드")} <span>{archivedCards.length}</span></h2></div><button onClick={() => setArchiveOpen(false)} aria-label="Close">×</button></header><p className="archive-help">{tr("Archived cards stay out of the board, timeline, totals, and milestones until you restore them.", "보관된 카드는 복원할 때까지 보드, 타임라인, 집계 및 마일스톤에서 제외됩니다.")}</p><div className="archive-card-list">{archivedCards.map(card => <article key={card.id}><i className={card.color}/><div><small>{card.project} · {statusLabel(card.status)}</small><b>{card.title}</b><span>{card.tag} · {tr("Due", "마감")} {card.due}</span></div><button className="archive-restore-button" onClick={() => void setCardArchived(card, false)}>↺ {tr("Restore", "복원")}</button><button className="archive-delete-button" onClick={() => void deleteCard(card)} aria-label={tr(`Delete ${card.title}`, `${card.title} 삭제`)}>×</button></article>)}{archivedCards.length === 0 && <div className="archive-empty"><span>▣</span><b>{tr("Your archive is empty", "보관함이 비어 있습니다")}</b><p>{tr("Drag a board card to Archive and it will appear here.", "보드 카드를 보관 영역으로 끌면 여기에 표시됩니다.")}</p></div>}</div></section></div>}
     {backupOpen && <div className="modal-backdrop" onMouseDown={() => setBackupOpen(false)}><section className="modal create-modal backup-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Workspace backup", "워크스페이스 백업")}><header><div><small>{tr("WORKSPACE SAFETY", "워크스페이스 안전 관리")}</small><h2>{tr("Full backup & restore", "전체 백업 및 복원")}</h2></div><button onClick={() => setBackupOpen(false)} aria-label="Close">×</button></header><p>{tr("Download one private, portable copy of all Questdeck workspace data. Attached document images are embedded in the file too.", "Questdeck 워크스페이스의 모든 데이터를 하나의 비공개 휴대용 파일로 다운로드하세요. 문서 첨부 이미지도 파일에 포함됩니다.")}</p><div className="backup-coverage"><span>{tr("Cards & subtasks", "카드 및 하위 작업")}</span><span>{tr("Projects & milestones", "프로젝트 및 마일스톤")}</span><span>{tr("Members & roles", "멤버 및 역할")}</span><span>{tr("Documents & images", "문서 및 이미지")}</span><span>{tr("Workspace settings", "워크스페이스 설정")}</span></div><div className="backup-options"><article><span>⇩</span><div><b>{tr("Download all workspace data", "모든 워크스페이스 데이터 다운로드")}</b><small>{tr(`${cards.length} cards · ${projects.length} projects · ${documents.length} documents`, `카드 ${cards.length}개 · 프로젝트 ${projects.length}개 · 문서 ${documents.length}개`)}</small></div><button className="create-button" disabled={backupBusy} onClick={() => void downloadWorkspaceBackup()}>{backupBusy ? tr("Preparing…", "준비 중…") : tr("Download all", "전체 다운로드")}</button></article><article><span>↺</span><div><b>{tr("Restore a board backup", "보드 백업 복원")}</b><small>{tr("Imports cards and subtasks from existing Questdeck board backups without deleting newer cards.", "기존 Questdeck 보드 백업에서 카드와 하위 작업을 가져오며 새 카드는 삭제하지 않습니다.")}</small></div><button className="secondary-button" disabled={backupBusy} onClick={() => backupInputRef.current?.click()}>{backupBusy ? tr("Working…", "작업 중…") : tr("Choose file", "파일 선택")}</button><input ref={backupInputRef} type="file" accept="application/json,.json" onChange={event => void restoreBoardBackup(event)} /></article></div><footer><small>✓ {tr("No passwords or sign-in tokens are included", "비밀번호나 로그인 토큰은 포함되지 않습니다")}</small><button onClick={() => setBackupOpen(false)}>{tr("Done", "완료")}</button></footer></section></div>}
 
-    {milestoneEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}><section className="modal create-modal milestone-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("Create milestone", "마일스톤 만들기")}><header><div><small>{tr("ROADMAP TARGET", "로드맵 목표")}</small><h2>{editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("New milestone", "새 마일스톤")}</h2></div><button onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }} aria-label="Close">×</button></header><form onSubmit={saveMilestone}><label>{tr("Milestone title", "마일스톤 제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingMilestone?.title ?? ""} placeholder={tr("What are you shipping?", "어떤 목표를 출시하나요?")} /></label><div className="form-row"><label>{tr("Target date", "목표 날짜")}<input name="milestoneDate" type="date" required value={milestoneDraftDate} onChange={event => setMilestoneDraftDate(event.target.value)} /></label><label>{tr("Stage", "단계")}<select name="stage" defaultValue={editingMilestone?.stage ?? "UP NEXT"}><option>UP NEXT</option><option>PRODUCTION</option><option>REVIEW</option><option>RELEASE</option><option>COMPLETE</option></select></label></div><label>{tr("Description", "설명")}<textarea name="note" maxLength={1000} defaultValue={editingMilestone?.note ?? ""} placeholder={tr("Define the delivery target and success criteria…", "출시 목표와 성공 조건을 입력하세요…")} /></label><section className="milestone-auto-panel" aria-live="polite"><header><span>✦</span><div><b>{tr("Automatic progress", "자동 진행률")}</b><small>{tr("Active-project cards due by this target date", "이 목표일까지 마감되는 활성 프로젝트 카드")}</small></div></header><div><article><small>{tr("PROGRESS", "진행률")}</small><b>{milestoneDraftStats.progress}%</b></article><article><small>{tr("COMPLETED", "완료")}</small><b>{milestoneDraftStats.completedCards}</b></article><article><small>{tr("TOTAL CARDS", "전체 카드")}</small><b>{milestoneDraftStats.totalCards}</b></article></div><p>{milestoneDraftStats.unscheduledCards > 0 ? tr(`${milestoneDraftStats.unscheduledCards} cards without a due date are not included.`, `마감일이 없는 카드 ${milestoneDraftStats.unscheduledCards}개는 포함되지 않습니다.`) : tr("Every active card has a due date and is eligible for tracking.", "모든 활성 카드에 마감일이 있어 자동 추적할 수 있습니다.")}</p></section><label>{tr("Color", "색상")}<select name="color" defaultValue={editingMilestone?.color ?? "violet"}><option value="violet">{tr("Violet", "보라")}</option><option value="mint">{tr("Mint", "민트")}</option><option value="coral">{tr("Coral", "코랄")}</option></select></label><footer className="milestone-editor-footer">{editingMilestone ? <button className="danger-button" type="button" onClick={() => void deleteMilestone(editingMilestone)}>{tr("Delete milestone", "마일스톤 삭제")}</button> : <span />}<div><button type="button" onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{editingMilestone ? tr("Save changes", "변경 저장") : tr("Create milestone", "마일스톤 만들기")}</button></div></footer></form></section></div>}
+    {milestoneEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}><section className="modal create-modal milestone-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("Create milestone", "마일스톤 만들기")}><header><div><small>{tr("ROADMAP TARGET", "로드맵 목표")}</small><h2>{editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("New milestone", "새 마일스톤")}</h2></div><button onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }} aria-label="Close">×</button></header><form onSubmit={saveMilestone}><label>{tr("Milestone title", "마일스톤 제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingMilestone?.title ?? ""} placeholder={tr("What are you shipping?", "어떤 목표를 출시하나요?")} /></label><div className="form-row"><label>{tr("Target date", "목표 날짜")}<input name="milestoneDate" type="date" required value={milestoneDraftDate} onChange={event => setMilestoneDraftDate(event.target.value)} /></label><label>{tr("Stage", "단계")}<input name="stage" required maxLength={80} list="milestone-stage-presets" defaultValue={editingMilestone?.stage ?? "UP NEXT"} placeholder={tr("Type any stage", "원하는 단계를 입력하세요")} /><datalist id="milestone-stage-presets"><option value="UP NEXT" /><option value="PRODUCTION" /><option value="REVIEW" /><option value="RELEASE" /><option value="COMPLETE" /></datalist><small className="field-help">{tr("Choose a suggestion or type your own stage.", "추천 단계를 선택하거나 직접 입력할 수 있습니다.")}</small></label></div><label>{tr("Description", "설명")}<textarea name="note" maxLength={1000} defaultValue={editingMilestone?.note ?? ""} placeholder={tr("Define the delivery target and success criteria…", "출시 목표와 성공 조건을 입력하세요…")} /></label><section className="milestone-auto-panel" aria-live="polite"><header><span>✦</span><div><b>{tr("Automatic progress", "자동 진행률")}</b><small>{tr("Active-project cards due by this target date", "이 목표일까지 마감되는 활성 프로젝트 카드")}</small></div></header><div><article><small>{tr("PROGRESS", "진행률")}</small><b>{milestoneDraftStats.progress}%</b></article><article><small>{tr("COMPLETED", "완료")}</small><b>{milestoneDraftStats.completedCards}</b></article><article><small>{tr("TOTAL CARDS", "전체 카드")}</small><b>{milestoneDraftStats.totalCards}</b></article></div><p>{milestoneDraftStats.unscheduledCards > 0 ? tr(`${milestoneDraftStats.unscheduledCards} cards without a due date are not included.`, `마감일이 없는 카드 ${milestoneDraftStats.unscheduledCards}개는 포함되지 않습니다.`) : tr("Every active card has a due date and is eligible for tracking.", "모든 활성 카드에 마감일이 있어 자동 추적할 수 있습니다.")}</p></section><fieldset className="milestone-color-picker"><legend>{tr("Milestone color", "마일스톤 색상")}</legend>{(["violet", "mint", "coral", "blue", "amber", "rose"] as Milestone["color"][]).map(color => <label key={color}><input type="radio" name="color" value={color} defaultChecked={(editingMilestone?.color ?? "violet") === color} /><span className={`milestone-color-swatch ${color}`} /><b>{tr(({violet:"Violet",mint:"Mint",coral:"Coral",blue:"Blue",amber:"Amber",rose:"Rose"})[color], ({violet:"보라",mint:"민트",coral:"코랄",blue:"파랑",amber:"호박",rose:"장미"})[color])}</b></label>)}</fieldset><footer className="milestone-editor-footer">{editingMilestone ? <button className="danger-button" type="button" onClick={() => void deleteMilestone(editingMilestone)}>{tr("Delete milestone", "마일스톤 삭제")}</button> : <span />}<div><button type="button" onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{editingMilestone ? tr("Save changes", "변경 저장") : tr("Create milestone", "마일스톤 만들기")}</button></div></footer></form></section></div>}
 
     {editMember && <div className="modal-backdrop" onMouseDown={() => setEditMember(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit member", "멤버 수정")}><header><div><small>{tr("MEMBER ACCESS", "멤버 권한")}</small><h2>{tr("Edit member", "멤버 수정")}</h2></div><button onClick={() => setEditMember(null)} aria-label="Close">×</button></header><form onSubmit={saveMemberEdits}><label>{tr("Name", "이름")}<input name="name" required autoFocus defaultValue={editMember.name} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required defaultValue={editMember.email} /></label><div className="form-row"><label>{tr("Primary discipline", "주요 분야")}<select name="discipline" required defaultValue={editMember.discipline}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editMember.status}><option>Active</option><option>Invited</option></select></label></div><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role" defaultValue={editMember.role} disabled={editMember.role === "Owner"}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select>{editMember.role === "Owner" && <input type="hidden" name="role" value="Owner" />}</label><footer className="member-edit-footer">{editMember.role !== "Owner" ? <button className="danger-button" type="button" onClick={() => void removeMember(editMember)}>{tr("Remove member", "멤버 삭제")}</button> : <span />}<div><button type="button" onClick={() => setEditMember(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save member", "멤버 저장")}</button></div></footer></form></section></div>}
 
