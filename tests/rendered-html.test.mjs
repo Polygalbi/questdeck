@@ -11,14 +11,14 @@ async function render() {
   }, { waitUntil() {}, passThroughOnException() {} });
 }
 
-test("server-renders the Questdeck workspace", async () => {
+test("server-renders the private Questdeck gate without workspace content", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>Questdeck — Game Production, in Play<\/title>/i);
-  assert.match(html, /Production board/);
-  assert.match(html, /Project Nightfall/);
+  assert.match(html, /Checking secure workspace access/);
+  assert.doesNotMatch(html, /Production board|Project Nightfall/);
   assert.doesNotMatch(html, /codex-preview|Building your site|react-loading-skeleton/i);
 });
 

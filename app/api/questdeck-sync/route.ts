@@ -14,6 +14,13 @@ export async function POST(request: Request) {
   const user = await userResponse.json() as { id?: string; email?: string };
   if (!user.id || !user.email) return Response.json({ error: "Account identity is incomplete" }, { status: 401 });
 
+  const memberResponse = await fetch(`${SUPABASE_URL}/rest/v1/questdeck_members?select=id&email=eq.${encodeURIComponent(user.email)}&status=eq.Active&limit=1`, {
+    headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization },
+  });
+  if (!memberResponse.ok) return Response.json({ error: "Workspace access could not be verified" }, { status: 403 });
+  const memberships = await memberResponse.json() as Array<{ id: number }>;
+  if (!memberships.length) return Response.json({ error: "This account is not an active workspace member" }, { status: 403 });
+
   const syncUrl = process.env.QUESTDECK_SYNC_URL;
   const syncSecret = process.env.QUESTDECK_SYNC_SECRET;
   if (!syncUrl || !syncSecret) return Response.json({ error: "Sync is not configured" }, { status: 503 });

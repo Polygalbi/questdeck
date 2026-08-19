@@ -122,28 +122,9 @@ async function hydrateDocumentImages(value: string) {
   return parsed.body.innerHTML;
 }
 
-const initialCards: Card[] = [
-  { id: 1, title: "Tune player movement", description: "Make traversal feel crisp and responsive before the next playtest.", tag: "Gameplay", owner: "MK", points: 3, priority: 9, color: "violet", status: "In progress", project: "Project Nightfall", due: "Today", dueDate: "2026-08-18" },
-  { id: 2, title: "Forest ambience pass", description: "Layer environmental loops for the northern forest biome.", tag: "Audio", owner: "JL", points: 2, priority: 7, color: "mint", status: "Ready", project: "Project Nightfall", due: "Today", dueDate: "2026-08-18" },
-  { id: 3, title: "Boss arena concept", description: "Explore three silhouettes and arena lighting directions.", tag: "Art", owner: "AS", points: 5, priority: 10, color: "coral", status: "Review", project: "Project Nightfall", due: "Tomorrow", dueDate: "2026-08-19" },
-  { id: 4, title: "Controller remapping", description: "Allow players to fully remap gamepad controls.", tag: "Engineering", owner: "NK", points: 5, priority: 8, color: "blue-card", status: "Ready", project: "Project Nightfall", due: "Aug 22", dueDate: "2026-08-22" },
-  { id: 5, title: "Steam page refresh", description: "Update key art, capsule copy, and screenshots for the showcase.", tag: "Marketing", owner: "JR", points: 3, priority: 6, color: "amber-card", status: "In progress", project: "Marketing", due: "Aug 21", dueDate: "2026-08-21" },
-  { id: 6, title: "Chapter two dialogue", description: "Final narrative edit and implementation notes.", tag: "Narrative", owner: "JK", points: 2, priority: 5, color: "rose-card", status: "Review", project: "Project Nightfall", due: "Aug 23", dueDate: "2026-08-23" },
-  { id: 7, title: "Playtest build 0.8", description: "Lock the candidate build and verify critical paths.", tag: "Release", owner: "MK", points: 8, priority: 10, color: "violet", status: "Done", project: "Project Nightfall", due: "Aug 16", dueDate: "2026-08-16" },
-  { id: 8, title: "New starter checklist", description: "Document local setup and first-week studio rituals.", tag: "Studio", owner: "AS", points: 1, priority: 3, color: "mint", status: "Done", project: "Studio Ops", due: "Aug 15", dueDate: "2026-08-15" },
-];
-
-const initialProjects: Project[] = [
-  { id: "nightfall", name: "Project Nightfall", count: 24, color: "purple", owner: "Mina Kwon", status: "Active", progress: 68, updated: "12 minutes ago" },
-  { id: "marketing", name: "Marketing", count: 8, color: "yellow", owner: "Jamie Kim", status: "Active", progress: 44, updated: "2 hours ago" },
-  { id: "studio-ops", name: "Studio Ops", count: 4, color: "blue", owner: "Alex Santos", status: "On hold", progress: 25, updated: "Yesterday" },
-];
-
-const initialMilestones: Milestone[] = [
-  { id: 1, title: "Festival demo", milestoneDate: "2026-08-30", progress: 68, completedCards: 34, totalCards: 50, note: "Playable demo for the Autumn Game Showcase", color: "violet", stage: "UP NEXT" },
-  { id: 2, title: "Content complete", milestoneDate: "2026-09-27", progress: 41, completedCards: 28, totalCards: 68, note: "All chapters and production assets locked", color: "mint", stage: "PRODUCTION" },
-  { id: 3, title: "Gold candidate", milestoneDate: "2026-11-14", progress: 18, completedCards: 12, totalCards: 66, note: "Release-ready build for platform certification", color: "coral", stage: "RELEASE" },
-];
+const initialCards: Card[] = [];
+const initialProjects: Project[] = [];
+const initialMilestones: Milestone[] = [];
 
 const productionStages: Status[] = ["Ready", "In progress", "Review", "Done"];
 const initialDisciplines = ["Production", "Game Design", "Engineering", "Art", "Audio", "Narrative", "Marketing", "QA", "General"];
@@ -155,18 +136,10 @@ const initialProductionDisciplines: ProductionDiscipline[] = [
   { id: 9, name: "General", color: "blue-card" },
 ];
 
-const initialMembers: Member[] = [
-  { id: 1000, name: "Polygalbi", email: "polygalbi@gmail.com", initials: "PO", role: "Owner", discipline: "Production", status: "Active" },
-  { id: 1, name: "Jamie Kim", email: "jamie@starfall.studio", initials: "JK", role: "Admin", discipline: "Production", status: "Active" },
-  { id: 2, name: "Mina Kwon", email: "mina@starfall.studio", initials: "MK", role: "Admin", discipline: "Game Design", status: "Active" },
-  { id: 3, name: "Alex Santos", email: "alex@starfall.studio", initials: "AS", role: "Member", discipline: "Art", status: "Active" },
-  { id: 4, name: "Jules Lee", email: "jules@starfall.studio", initials: "JL", role: "Member", discipline: "Audio", status: "Active" },
-  { id: 5, name: "Noah Kim", email: "noah@starfall.studio", initials: "NK", role: "Member", discipline: "Engineering", status: "Active" },
-];
+const initialMembers: Member[] = [];
 
 const initialWorkspaces: Workspace[] = [
-  { id: "starfall", name: "Starfall Studio", initials: "SF", members: 5, status: "Active" },
-  { id: "nightfall", name: "Nightfall Strike Team", initials: "NS", members: 3, status: "Active" },
+  { id: "workspace", name: "Workspace", initials: "W", members: 0, status: "Active" },
 ];
 
 const initialNotifications: Notification[] = [];
@@ -201,10 +174,7 @@ function relativeTime(value: string) {
   return days === 1 ? "Yesterday" : `${days}d`;
 }
 
-const initialSubTodos: Record<number, SubTodo[]> = {
-  1: [{ id: 101, text: "Verify keyboard controls", done: true }, { id: 102, text: "Test with controller", done: true }, { id: 103, text: "Capture playtest notes", done: false }],
-  3: [{ id: 301, text: "Choose final silhouette", done: true }, { id: 302, text: "Review arena lighting", done: false }],
-};
+const initialSubTodos: Record<number, SubTodo[]> = {};
 
 const timelineReferenceDate = new Date(2026, 7, 18);
 const dayMs = 86_400_000;
@@ -367,6 +337,8 @@ export default function Home() {
   const cardHoverTimer = useRef<number | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [workspaceAccess, setWorkspaceAccess] = useState<"checking" | "allowed" | "denied">("checking");
   const [authOpen, setAuthOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [nameEditorOpen, setNameEditorOpen] = useState(false);
@@ -408,7 +380,8 @@ export default function Home() {
   }
 
   useEffect(() => {
-    const headers = { apikey: SUPABASE_PUBLISHABLE_KEY };
+    if (!session?.access_token || workspaceAccess !== "allowed") return;
+    const headers = { apikey: SUPABASE_PUBLISHABLE_KEY, authorization: `Bearer ${session.access_token}` };
     Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,priority,color,status,due_label,due_date,start_date,archived,questdeck_projects(name)&order=id.asc`, { headers }).then(response => {
         if (!response.ok) throw new Error("Supabase card request failed");
@@ -439,20 +412,33 @@ export default function Home() {
         setDataSource("supabase");
       })
       .catch(() => setDataSource("local"));
-  }, []);
+  }, [session?.access_token, workspaceAccess]);
   useEffect(() => {
-    void supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+    void supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => { setSession(nextSession); setAuthReady(true); });
     return () => subscription.unsubscribe();
   }, []);
   useEffect(() => {
-    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_disciplines?select=id,name,color&order=created_at.asc`, { headers: { apikey: SUPABASE_PUBLISHABLE_KEY } })
+    if (!session?.access_token || workspaceAccess !== "allowed") return;
+    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_disciplines?select=id,name,color&order=created_at.asc`, { headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization: `Bearer ${session.access_token}` } })
       .then(response => response.ok ? response.json() : Promise.reject(new Error("Discipline request failed")))
       .then((items: ProductionDiscipline[]) => { if (items.length) setProductionDisciplines(items); })
       .catch(() => undefined);
-  }, []);
+  }, [session?.access_token, workspaceAccess]);
   useEffect(() => {
-    if (!session?.access_token) {
+    if (!session?.access_token || !session.user.email) {
+      setWorkspaceAccess("checking");
+      return;
+    }
+    const headers = { apikey: SUPABASE_PUBLISHABLE_KEY, authorization: `Bearer ${session.access_token}` };
+    const email = encodeURIComponent(session.user.email);
+    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_members?select=id&email=eq.${email}&status=eq.Active&limit=1`, { headers })
+      .then(response => response.ok ? response.json() : Promise.reject(new Error("Access check failed")))
+      .then((items: Array<{ id: number }>) => setWorkspaceAccess(items.length ? "allowed" : "denied"))
+      .catch(() => setWorkspaceAccess("denied"));
+  }, [session?.access_token, session?.user.email]);
+  useEffect(() => {
+    if (!session?.access_token || workspaceAccess !== "allowed") {
       setCurrentPermissions(null);
       setDocuments([]);
       setActivityEvents([]);
@@ -476,19 +462,19 @@ export default function Home() {
       }));
       setCurrentPermissions(data.permissions);
     }).catch(error => setToast(error instanceof Error ? error.message : tr("Could not load workspace access", "워크스페이스 권한을 불러오지 못했습니다")));
-  }, [session?.access_token]);
+  }, [session?.access_token, workspaceAccess]);
   useEffect(() => {
-    if (!session?.access_token) return;
+    if (!session?.access_token || workspaceAccess !== "allowed") return;
     void loadWorkspaceFeed(session.access_token).catch(() => undefined);
     const timer = window.setInterval(() => void loadWorkspaceFeed(session.access_token).catch(() => undefined), 20_000);
     return () => window.clearInterval(timer);
-  }, [session?.access_token]);
+  }, [session?.access_token, workspaceAccess]);
   useEffect(() => {
-    if (!session?.access_token) return;
+    if (!session?.access_token || workspaceAccess !== "allowed") return;
     void syncQuestdeck<{ documents: Array<{ id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }> }>("load_documents", {}, session.access_token)
       .then(data => setDocuments(data.documents.map(item => ({ id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at }))))
       .catch(error => setToast(error instanceof Error ? error.message : tr("Could not load documents", "문서를 불러오지 못했습니다")));
-  }, [session?.access_token]);
+  }, [session?.access_token, workspaceAccess]);
   useEffect(() => {
     if (!documentEditorOpen || !editingDocument || !documentDirty) return;
     const timer = window.setTimeout(() => void saveDocumentDraft(false), 1100);
@@ -511,16 +497,16 @@ export default function Home() {
   }, [documentEditorOpen, editingDocument?.id, documentDraftTitle]);
   useEffect(() => {
     const shareSlug = new URLSearchParams(window.location.search).get("document");
-    if (!shareSlug || !/^[0-9a-f-]{36}$/i.test(shareSlug)) return;
+    if (!shareSlug || !/^[0-9a-f-]{36}$/i.test(shareSlug) || !session?.access_token || workspaceAccess !== "allowed") return;
     setPublicDocumentLoading(true);
-    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_documents?select=id,title,content,created_by_email,owner_name,is_published,share_slug,created_at,updated_at&share_slug=eq.${shareSlug}&is_published=eq.true&limit=1`, { headers: { apikey: SUPABASE_PUBLISHABLE_KEY } })
+    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_documents?select=id,title,content,created_by_email,owner_name,is_published,share_slug,created_at,updated_at&share_slug=eq.${shareSlug}&is_published=eq.true&limit=1`, { headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization: `Bearer ${session.access_token}` } })
       .then(response => response.ok ? response.json() : Promise.reject(new Error("Document request failed")))
       .then(async (items: Array<{ id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }>) => {
         const item = items[0];
         if (item) setPublicDocument({ id: item.id, title: item.title, content: await hydrateDocumentImages(item.content), createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at });
       })
       .finally(() => setPublicDocumentLoading(false));
-  }, []);
+  }, [session?.access_token, workspaceAccess]);
   useEffect(() => { window.localStorage.setItem("questdeck-cards", JSON.stringify(cards)); }, [cards]);
   useEffect(() => {
     const saved = window.localStorage.getItem("questdeck-column-names");
@@ -2054,6 +2040,20 @@ export default function Home() {
     const top = rect.bottom + tooltipHeight + 16 <= window.innerHeight ? rect.bottom + 10 : Math.max(16, rect.top - tooltipHeight - 10);
     setTimelineHover({ cardId, left, top });
   }
+
+  if (!authReady || (session && workspaceAccess === "checking")) return <main className="private-auth-page"><section className="private-auth-card private-auth-loading"><span className="brand-mark">Q</span><div className="private-auth-spinner" /><p>{tr("Checking secure workspace access…", "안전한 워크스페이스 접근 권한을 확인하는 중…")}</p></section></main>;
+
+  if (!session) return <main className="private-auth-page">
+    <section className="private-auth-card">
+      <header><span className="brand-mark">Q</span><b>Questdeck</b><select value={language} onChange={event => setLanguage(event.target.value as "en" | "ko")} aria-label="Language"><option value="en">EN</option><option value="ko">한국어</option></select></header>
+      <div className="private-auth-hero"><small>{tr("PRIVATE WORKSPACE", "비공개 워크스페이스")}</small><h1>{tr("Sign in to continue", "계속하려면 로그인하세요")}</h1><p>{tr("Questdeck content is available only to invited workspace members.", "Questdeck 콘텐츠는 초대된 워크스페이스 멤버만 볼 수 있습니다.")}</p></div>
+      <button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button>
+      <div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div>
+      <form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete="current-password" placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<button className="create-button private-auth-submit" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : tr("Sign in", "로그인")}</button></form>
+    </section>
+  </main>;
+
+  if (workspaceAccess === "denied") return <main className="private-auth-page"><section className="private-auth-card private-access-denied"><header><span className="brand-mark">Q</span><b>Questdeck</b></header><span className="private-lock">⌾</span><small>{tr("ACCESS RESTRICTED", "접근 제한")}</small><h1>{tr("This account is not a workspace member", "이 계정은 워크스페이스 멤버가 아닙니다")}</h1><p>{session.user.email}</p><p>{tr("Ask a workspace owner to add this email as an active member.", "워크스페이스 소유자에게 이 이메일을 활성 멤버로 추가해 달라고 요청하세요.")}</p><button className="secondary-button" onClick={() => void supabase.auth.signOut()}>{tr("Sign out", "로그아웃")}</button></section></main>;
 
   if (publicDocumentLoading) return <main className="shared-document-page"><section className="shared-document"><span className="brand-mark">Q</span><p>{tr("Loading shared document…", "공유 문서를 불러오는 중…")}</p></section></main>;
   if (publicDocument) return <main className="shared-document-page"><article className="shared-document"><header><button className="shared-brand" onClick={() => { window.history.replaceState({}, "", "/"); setPublicDocument(null); }}><span className="brand-mark">Q</span><b>Questdeck</b></button><span>{tr("Shared document", "공유 문서")}</span></header><small>{tr("DOCUMENT", "문서")}</small><h1>{publicDocument.title}</h1><div className="shared-document-meta">{tr("By", "작성자")} {publicDocument.ownerName || publicDocument.createdByEmail} · {new Date(publicDocument.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")}</div><div className="shared-document-body rich-document-content" dangerouslySetInnerHTML={{ __html: sanitizeRichText(publicDocument.content) }} /></article></main>;
