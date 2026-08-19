@@ -4,8 +4,8 @@ import { DragEvent, FormEvent, useEffect, useMemo, useState, type CSSProperties 
 import { createClient, type Session } from "@supabase/supabase-js";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "timeline" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
-type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null };
+type View = "overview" | "quests" | "timeline" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
+type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null; startDate?: string | null };
 type Account = { displayName: string; email: string; fullName: string | null };
 type RoleName = "Owner" | "Admin" | "Member" | "Guest";
 type PermissionKey = "view_projects" | "edit_cards" | "manage_members" | "workspace_settings" | "billing_security";
@@ -17,6 +17,7 @@ type Notification = { id: number; title: string; detail: string; time: string; i
 type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
 type SubTodo = { id: number; text: string; done: boolean };
 type ProductionDiscipline = { id: number; name: string; color: string };
+type WorkspaceDocument = { id: number; title: string; content: string; createdByEmail: string; ownerName: string; isPublished: boolean; shareSlug: string; createdAt: string; updatedAt: string };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -33,6 +34,7 @@ type SupabaseCard = {
   status: Status;
   due_label: string;
   due_date: string | null;
+  start_date: string | null;
   priority: number;
   questdeck_projects: { name: string };
 };
@@ -181,10 +183,17 @@ export default function Home() {
   const [createStatus, setCreateStatus] = useState<Status>("Ready");
   const [createEffort, setCreateEffort] = useState(3);
   const [createPriority, setCreatePriority] = useState(5);
+  const [createStartDate, setCreateStartDate] = useState("");
   const [createDueDate, setCreateDueDate] = useState("");
   const [editEffort, setEditEffort] = useState(3);
   const [editPriority, setEditPriority] = useState(5);
+  const [editStartDate, setEditStartDate] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
+  const [documents, setDocuments] = useState<WorkspaceDocument[]>([]);
+  const [documentEditorOpen, setDocumentEditorOpen] = useState(false);
+  const [editingDocument, setEditingDocument] = useState<WorkspaceDocument | null>(null);
+  const [publicDocument, setPublicDocument] = useState<WorkspaceDocument | null>(null);
+  const [publicDocumentLoading, setPublicDocumentLoading] = useState(false);
   const [productionDisciplines, setProductionDisciplines] = useState(initialProductionDisciplines);
   const [disciplineManagerOpen, setDisciplineManagerOpen] = useState(false);
   const [newProductionDiscipline, setNewProductionDiscipline] = useState("");
@@ -241,7 +250,7 @@ export default function Home() {
   useEffect(() => {
     const headers = { apikey: SUPABASE_PUBLISHABLE_KEY };
     Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,priority,color,status,due_label,due_date,questdeck_projects(name)&order=id.asc`, { headers }).then(response => {
+      fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,priority,color,status,due_label,due_date,start_date,questdeck_projects(name)&order=id.asc`, { headers }).then(response => {
         if (!response.ok) throw new Error("Supabase card request failed");
         return response.json() as Promise<SupabaseCard[]>;
       }),
@@ -253,7 +262,7 @@ export default function Home() {
       .then(([remoteCards, remoteSubTodos]) => {
         const mapped = remoteCards.map(card => ({
           id: card.id, title: card.title, description: card.description, tag: card.tag, owner: card.owner_initials,
-          points: card.points, priority: card.priority ?? 5, color: card.color, status: card.status, project: card.questdeck_projects.name, due: card.due_label || "No date", dueDate: card.due_date,
+          points: card.points, priority: card.priority ?? 5, color: card.color, status: card.status, project: card.questdeck_projects.name, due: card.due_label || "No date", dueDate: card.due_date, startDate: card.start_date,
         } satisfies Card));
         setCards(mapped);
 
@@ -280,6 +289,7 @@ export default function Home() {
   useEffect(() => {
     if (!session?.access_token) {
       setCurrentPermissions(null);
+      setDocuments([]);
       return;
     }
     void syncQuestdeck<{
@@ -300,6 +310,24 @@ export default function Home() {
       setCurrentPermissions(data.permissions);
     }).catch(error => setToast(error instanceof Error ? error.message : tr("Could not load workspace access", "워크스페이스 권한을 불러오지 못했습니다")));
   }, [session?.access_token]);
+  useEffect(() => {
+    if (!session?.access_token) return;
+    void syncQuestdeck<{ documents: Array<{ id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }> }>("load_documents", {}, session.access_token)
+      .then(data => setDocuments(data.documents.map(item => ({ id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at }))))
+      .catch(error => setToast(error instanceof Error ? error.message : tr("Could not load documents", "문서를 불러오지 못했습니다")));
+  }, [session?.access_token]);
+  useEffect(() => {
+    const shareSlug = new URLSearchParams(window.location.search).get("document");
+    if (!shareSlug || !/^[0-9a-f-]{36}$/i.test(shareSlug)) return;
+    setPublicDocumentLoading(true);
+    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_documents?select=id,title,content,created_by_email,owner_name,is_published,share_slug,created_at,updated_at&share_slug=eq.${shareSlug}&is_published=eq.true&limit=1`, { headers: { apikey: SUPABASE_PUBLISHABLE_KEY } })
+      .then(response => response.ok ? response.json() : Promise.reject(new Error("Document request failed")))
+      .then((items: Array<{ id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }>) => {
+        const item = items[0];
+        if (item) setPublicDocument({ id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at });
+      })
+      .finally(() => setPublicDocumentLoading(false));
+  }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-cards", JSON.stringify(cards)); }, [cards]);
   useEffect(() => {
     const saved = window.localStorage.getItem("questdeck-column-names");
@@ -406,9 +434,10 @@ export default function Home() {
     const data = new FormData(event.currentTarget);
     const tag = String(data.get("tag"));
     const discipline = productionDisciplines.find(item => item.name === tag);
+    if (createStartDate && createDueDate && createStartDate > createDueDate) { setToast(tr("Start date must be before the due date", "시작일은 마감일보다 빨라야 합니다")); return; }
     const newCard: Card = {
       id: Date.now(), title: String(data.get("title")), description: String(data.get("description") || "A newly forged quest, ready for the team."),
-      tag, owner: "JK", points: createEffort, priority: createPriority, color: discipline?.color ?? "violet", status: createStatus, project: String(data.get("project")), due: dueLabelFromInput(createDueDate), dueDate: createDueDate || null,
+      tag, owner: "JK", points: createEffort, priority: createPriority, color: discipline?.color ?? "violet", status: createStatus, project: String(data.get("project")), due: dueLabelFromInput(createDueDate), dueDate: createDueDate || null, startDate: createStartDate || null,
     };
     setCards(prev => [newCard, ...prev]); setCreateOpen(false); setToast("Card added to your deck"); setView("quests");
     void syncQuestdeck("create_card", { card: newCard }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
@@ -418,6 +447,7 @@ export default function Home() {
     setCreateStatus(status);
     setCreateEffort(3);
     setCreatePriority(5);
+    setCreateStartDate("");
     setCreateDueDate("");
     setActiveColumnMenu(null);
     if (session) setCreateOpen(true);
@@ -427,6 +457,7 @@ export default function Home() {
   function openCardEditor(card: Card) {
     setEditEffort(card.points);
     setEditPriority(card.priority);
+    setEditStartDate(card.startDate ?? card.dueDate ?? "");
     setEditDueDate(card.dueDate ?? "");
     setEditCardOpen(true);
   }
@@ -832,6 +863,7 @@ export default function Home() {
     const accessToken = requireSession();
     if (!accessToken) return;
     const data = new FormData(event.currentTarget);
+    if (editStartDate && editDueDate && editStartDate > editDueDate) { setToast(tr("Start date must be before the due date", "시작일은 마감일보다 빨라야 합니다")); return; }
     const updated: Card = {
       ...selected,
       title: String(data.get("title")),
@@ -843,6 +875,7 @@ export default function Home() {
       project: String(data.get("project")),
       due: dueLabelFromInput(editDueDate),
       dueDate: editDueDate || null,
+      startDate: editStartDate || null,
       status: String(data.get("status")) as Status,
     };
     setCards(current => current.map(card => card.id === updated.id ? updated : card));
@@ -850,6 +883,44 @@ export default function Home() {
     setEditCardOpen(false);
     setToast(tr("Card updated", "카드를 수정했습니다"));
     void syncQuestdeck("update_card", { card: updated }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+  }
+
+  function mapDocument(item: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }): WorkspaceDocument {
+    return { id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at };
+  }
+
+  async function saveDocument(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const data = new FormData(event.currentTarget);
+    const document = { ...editingDocument, title: String(data.get("title") ?? "").trim(), content: String(data.get("content") ?? ""), createdByEmail: editingDocument?.createdByEmail ?? accountEmail ?? "", ownerName: editingDocument?.ownerName ?? accountName, isPublished: editingDocument?.isPublished ?? false };
+    try {
+      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>(editingDocument ? "update_document" : "create_document", { document }, accessToken);
+      const saved = mapDocument(result.document);
+      setDocuments(current => editingDocument ? current.map(item => item.id === saved.id ? saved : item) : [saved, ...current]);
+      setDocumentEditorOpen(false); setEditingDocument(null); setToast(tr("Document saved", "문서를 저장했습니다"));
+    } catch (error) { setToast(error instanceof Error ? error.message : tr("Could not save document", "문서를 저장하지 못했습니다")); }
+  }
+
+  async function setDocumentPublished(document: WorkspaceDocument, isPublished: boolean, copyLink = false) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    try {
+      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>("update_document", { document: { ...document, isPublished } }, accessToken);
+      const saved = mapDocument(result.document);
+      setDocuments(current => current.map(item => item.id === saved.id ? saved : item));
+      if (copyLink && isPublished) { await navigator.clipboard.writeText(`${window.location.origin}/?document=${saved.shareSlug}`); setToast(tr("Share link copied", "공유 링크를 복사했습니다")); }
+      else setToast(isPublished ? tr("Document published", "문서를 공개했습니다") : tr("Document is private again", "문서를 다시 비공개로 전환했습니다"));
+    } catch (error) { setToast(error instanceof Error ? error.message : tr("Could not update sharing", "공유 설정을 변경하지 못했습니다")); }
+  }
+
+  async function deleteDocument(document: WorkspaceDocument) {
+    if (!window.confirm(tr(`Delete “${document.title}”?`, `“${document.title}” 문서를 삭제할까요?`))) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    try { await syncQuestdeck("delete_document", { documentId: document.id }, accessToken); setDocuments(current => current.filter(item => item.id !== document.id)); setToast(tr("Document deleted", "문서를 삭제했습니다")); }
+    catch (error) { setToast(error instanceof Error ? error.message : tr("Could not delete document", "문서를 삭제하지 못했습니다")); }
   }
 
   const accountEmail = session?.user.email ?? account?.email ?? null;
@@ -880,14 +951,14 @@ export default function Home() {
     const statusOrder: Record<Status, number> = { Ready: 0, "In progress": 1, Review: 2, Done: 3 };
     return cards
       .filter(card => activeNames.has(card.project) && (project === "All projects" || card.project === project))
-      .map(card => ({ card, date: card.dueDate ? new Date(`${card.dueDate}T12:00:00`) : cardDueDate(card.due) }))
-      .filter((item): item is { card: Card; date: Date } => Boolean(item.date))
-      .filter(item => item.date >= timelineStart && item.date <= timelineEnd)
+      .map(card => { const endDate = card.dueDate ? new Date(`${card.dueDate}T12:00:00`) : cardDueDate(card.due); const startDate = card.startDate ? new Date(`${card.startDate}T12:00:00`) : endDate; return { card, startDate, endDate }; })
+      .filter((item): item is { card: Card; startDate: Date; endDate: Date } => Boolean(item.startDate && item.endDate))
+      .filter(item => item.endDate >= timelineStart && item.startDate <= timelineEnd)
       .sort((a, b) => {
-        if (timelineSort === "Status") return statusOrder[a.card.status] - statusOrder[b.card.status] || a.date.getTime() - b.date.getTime();
-        if (timelineSort === "Owner") return a.card.owner.localeCompare(b.card.owner) || a.date.getTime() - b.date.getTime();
+        if (timelineSort === "Status") return statusOrder[a.card.status] - statusOrder[b.card.status] || a.endDate.getTime() - b.endDate.getTime();
+        if (timelineSort === "Owner") return a.card.owner.localeCompare(b.card.owner) || a.endDate.getTime() - b.endDate.getTime();
         if (timelineSort === "Name") return a.card.title.localeCompare(b.card.title);
-        return a.date.getTime() - b.date.getTime() || a.card.title.localeCompare(b.card.title);
+        return a.endDate.getTime() - b.endDate.getTime() || a.card.title.localeCompare(b.card.title);
       });
   }, [activeProjects, cards, project, timelineEnd, timelineSort, timelineStart]);
 
@@ -896,8 +967,13 @@ export default function Home() {
     if (!accessToken) return;
     const previous = cards.find(card => card.id === cardId);
     if (!previous) return;
-    const dueDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    const updated = { ...previous, due: timelineDateLabel(date), dueDate };
+    const previousStart = previous.startDate ? new Date(`${previous.startDate}T12:00:00`) : previous.dueDate ? new Date(`${previous.dueDate}T12:00:00`) : date;
+    const previousEnd = previous.dueDate ? new Date(`${previous.dueDate}T12:00:00`) : previousStart;
+    const duration = Math.max(0, Math.round((previousEnd.getTime() - previousStart.getTime()) / dayMs));
+    const movedEnd = addDays(date, duration);
+    const startDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const dueDate = `${movedEnd.getFullYear()}-${String(movedEnd.getMonth() + 1).padStart(2, "0")}-${String(movedEnd.getDate()).padStart(2, "0")}`;
+    const updated = { ...previous, startDate, due: timelineDateLabel(movedEnd), dueDate };
     setCards(current => current.map(card => card.id === cardId ? updated : card));
     setSelected(current => current?.id === cardId ? updated : current);
     setDraggedTimelineCard(null);
@@ -920,6 +996,9 @@ export default function Home() {
     setTimelineHover({ cardId, left, top });
   }
 
+  if (publicDocumentLoading) return <main className="shared-document-page"><section className="shared-document"><span className="brand-mark">Q</span><p>{tr("Loading shared document…", "공유 문서를 불러오는 중…")}</p></section></main>;
+  if (publicDocument) return <main className="shared-document-page"><article className="shared-document"><header><button className="shared-brand" onClick={() => { window.history.replaceState({}, "", "/"); setPublicDocument(null); }}><span className="brand-mark">Q</span><b>Questdeck</b></button><span>{tr("Shared document", "공유 문서")}</span></header><small>{tr("DOCUMENT", "문서")}</small><h1>{publicDocument.title}</h1><div className="shared-document-meta">{tr("By", "작성자")} {publicDocument.ownerName || publicDocument.createdByEmail} · {new Date(publicDocument.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")}</div><div className="shared-document-body">{publicDocument.content.split("\n").map((line, index) => line ? <p key={index}>{line}</p> : <br key={index}/>)}</div></article></main>;
+
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
       <div className="brand"><button className="brand-home" onClick={() => { setView("overview"); setMobileNavOpen(false); setWorkspaceOpen(false); }} aria-label={tr("Go to Questdeck overview", "Questdeck 개요로 이동")}><span className="brand-mark">Q</span><span>Questdeck</span></button><button className="sidebar-close" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation">×</button></div>
@@ -929,6 +1008,7 @@ export default function Home() {
         <button className={`nav-item ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")}><span>⌂</span> {tr("Overview", "개요")}</button>
         <button className={`nav-item ${view === "quests" ? "active" : ""}`} onClick={() => setView("quests")}><span>▤</span> {tr("Production board", "프로덕션 보드")} <i>{cards.filter(c => c.status !== "Done").length}</i></button>
         <button className={`nav-item ${view === "timeline" ? "active" : ""}`} onClick={() => setView("timeline")}><span>↔</span> {tr("Timeline", "타임라인")}</button>
+        <button className={`nav-item ${view === "documents" ? "active" : ""}`} onClick={() => setView("documents")}><span>▧</span> {tr("Documents", "문서")} <i>{documents.length}</i></button>
         <button className={`nav-item ${view === "milestones" ? "active" : ""}`} onClick={() => setView("milestones")}><span>◎</span> {tr("Milestones", "마일스톤")}</button>
         <p className="nav-label">{tr("MANAGE", "관리")}</p>
         <button className={`nav-item ${view === "management" ? "active" : ""}`} onClick={() => setView("management")}><span>⚙</span> {tr("Workspace", "워크스페이스")}</button>
@@ -991,14 +1071,16 @@ export default function Home() {
             <div className="date-grid" style={{gridTemplateColumns:`210px repeat(${timelineDayCount},minmax(58px,1fr))`}}><div className="date-label-spacer"/>{timelineDates.map(date => { const today = date.getTime() === timelineReferenceDate.getTime(); const weekend = date.getDay() === 0 || date.getDay() === 6; return <div className={`date-cell ${today ? "today" : ""} ${weekend ? "weekend" : ""}`} key={date.toISOString()}><small>{date.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { weekday: "short" })}</small><b>{date.getDate()}</b></div>})}</div>
             <div className="schedule-body">
               {timelineReferenceDate >= timelineStart && timelineReferenceDate <= timelineEnd && <div className="today-line" style={{left:`calc(210px + ((100% - 210px) / ${timelineDayCount} * ${Math.floor((timelineReferenceDate.getTime() - timelineStart.getTime()) / dayMs) + .5}))`}} aria-hidden="true"><span>{tr("Today", "오늘")}</span></div>}
-              {timelineCards.map(({card,date}) => { const start = Math.floor((date.getTime() - timelineStart.getTime()) / dayMs); const span = Math.min(timelineDayCount - start, Math.max(1, Math.ceil(card.points / 2))); const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; return <div className="schedule-row" key={card.id}><div className="lane-label"><span className={`lane-swatch ${card.color}`}/><div><b>{card.title}</b><small>{card.tag} · {card.owner} · {statusLabel(card.status)}</small></div></div><div className="lane-track" style={{gridTemplateColumns:`repeat(${timelineDayCount},minmax(58px,1fr))`, "--timeline-columns":timelineDayCount} as CSSProperties}>{timelineDates.map((dropDate,index) => <div className={`timeline-drop-zone ${draggedTimelineCard ? "drag-active" : ""}`} style={{gridColumn:index + 1}} key={dropDate.toISOString()} onDragOver={event => event.preventDefault()} onDrop={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-card") || draggedTimelineCard); if (cardId) void moveTimelineCard(cardId, dropDate); }} />)}<button draggable onDragStart={(event: DragEvent<HTMLButtonElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-card", String(card.id)); setDraggedTimelineCard(card.id); }} onDragEnd={() => setDraggedTimelineCard(null)} onMouseEnter={event => showTimelineTooltip(card.id, event.currentTarget)} onMouseLeave={() => setTimelineHover(null)} onFocus={event => showTimelineTooltip(card.id, event.currentTarget)} onBlur={() => setTimelineHover(null)} className={`run-bar ${card.color} ${draggedTimelineCard === card.id ? "dragging" : ""}`} style={{gridColumn:`${start + 1} / span ${span}`}} onClick={() => setSelected(card)} aria-label={tr(`Open ${card.title}; drag to reschedule`, `${card.title} 열기; 끌어서 일정 변경`)}><span>{card.title}</span>{todos.length > 0 && <small className="run-subtasks">☑ {completed}/{todos.length}</small>}<small>{card.due}</small><i style={{width:`${card.status === "Done" ? 100 : todos.length ? Math.round(completed / todos.length * 100) : 0}%`}}/></button></div></div>})}
+              {timelineCards.map(({card,startDate,endDate}) => { const visibleStart = startDate < timelineStart ? timelineStart : startDate; const visibleEnd = endDate > timelineEnd ? timelineEnd : endDate; const start = Math.max(0, Math.floor((visibleStart.getTime() - timelineStart.getTime()) / dayMs)); const span = Math.max(1, Math.floor((visibleEnd.getTime() - visibleStart.getTime()) / dayMs) + 1); const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; return <div className="schedule-row" key={card.id}><div className="lane-label"><span className={`lane-swatch ${card.color}`}/><div><b>{card.title}</b><small>{card.tag} · {card.owner} · {statusLabel(card.status)}</small></div></div><div className="lane-track" style={{gridTemplateColumns:`repeat(${timelineDayCount},minmax(58px,1fr))`, "--timeline-columns":timelineDayCount} as CSSProperties}>{timelineDates.map((dropDate,index) => <div className={`timeline-drop-zone ${draggedTimelineCard ? "drag-active" : ""}`} style={{gridColumn:index + 1}} key={dropDate.toISOString()} onDragOver={event => event.preventDefault()} onDrop={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-card") || draggedTimelineCard); if (cardId) void moveTimelineCard(cardId, dropDate); }} />)}<button draggable onDragStart={(event: DragEvent<HTMLButtonElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-card", String(card.id)); setDraggedTimelineCard(card.id); }} onDragEnd={() => setDraggedTimelineCard(null)} onMouseEnter={event => showTimelineTooltip(card.id, event.currentTarget)} onMouseLeave={() => setTimelineHover(null)} onFocus={event => showTimelineTooltip(card.id, event.currentTarget)} onBlur={() => setTimelineHover(null)} className={`run-bar ${card.color} ${draggedTimelineCard === card.id ? "dragging" : ""}`} style={{gridColumn:`${start + 1} / span ${span}`}} onClick={() => setSelected(card)} aria-label={tr(`Open ${card.title}; drag to reschedule`, `${card.title} 열기; 끌어서 일정 변경`)}><span>{card.title}</span>{todos.length > 0 && <small className="run-subtasks">☑ {completed}/{todos.length}</small>}<small>{timelineDateLabel(startDate)} → {timelineDateLabel(endDate)}</small><i style={{width:`${card.status === "Done" ? 100 : todos.length ? Math.round(completed / todos.length * 100) : 0}%`}}/></button></div></div>})}
               {timelineCards.length === 0 && <div className="timeline-empty"><span>◇</span><div><b>{tr("No scheduled cards in this period", "이 기간에 예정된 카드가 없습니다")}</b><small>{tr("Choose another project or move to a different date range.", "다른 프로젝트를 선택하거나 날짜 범위를 이동하세요.")}</small></div></div>}
             </div>
           </div>
           <footer className="timeline-legend"><span><i className="legend-dot active-dot"/> {tr("Board card", "보드 카드")}</span><span>☑ {tr("Sub-task progress", "하위 작업 진행률")}</span><span>◷ {tr("Due date", "마감일")}</span><p>{tr("Drag a card onto another day to reschedule it", "카드를 다른 날짜로 끌어 일정을 변경하세요")}</p></footer>
         </section>
-        {timelineHover && (() => { const card = cards.find(item => item.id === timelineHover.cardId); if (!card) return null; const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; return <aside className="timeline-floating-tooltip" role="tooltip" style={{left:timelineHover.left,top:timelineHover.top}}><b>{card.title}</b><p>{card.description}</p><div><strong>{card.project}</strong><strong>{statusLabel(card.status)}</strong></div><div><strong>◉ {card.owner}</strong><strong>◷ {card.due}</strong><strong>◆ {card.points}</strong></div>{todos.length > 0 && <footer><b>{tr("Sub-tasks", "하위 작업")} {completed}/{todos.length}</b><span>{todos.slice(0,2).map(todo => `${todo.done ? "✓" : "○"} ${todo.text}`).join(" · ")}</span></footer>}</aside> })()}
+        {timelineHover && (() => { const card = cards.find(item => item.id === timelineHover.cardId); if (!card) return null; const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; const start = card.startDate ? timelineDateLabel(new Date(`${card.startDate}T12:00:00`)) : card.due; return <aside className="timeline-floating-tooltip" role="tooltip" style={{left:timelineHover.left,top:timelineHover.top}}><b>{card.title}</b><p>{card.description}</p><div><strong>{card.project}</strong><strong>{statusLabel(card.status)}</strong></div><div><strong>◉ {card.owner}</strong><strong>↔ {start} → {card.due}</strong><strong>◆ {card.points}</strong></div>{todos.length > 0 && <footer><b>{tr("Sub-tasks", "하위 작업")} {completed}/{todos.length}</b><span>{todos.slice(0,2).map(todo => `${todo.done ? "✓" : "○"} ${todo.text}`).join(" · ")}</span></footer>}</aside> })()}
       </div>}
+
+      {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Write studio notes, publish them, and share a read-only link.", "스튜디오 문서를 작성하고 공개하여 읽기 전용 링크로 공유하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => { if (!session) { setAuthOpen(true); return; } setEditingDocument(null); setDocumentEditorOpen(true); }}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{documents.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{document.content.trim().slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => { setEditingDocument(document); setDocumentEditorOpen(true); }}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{documents.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
 
       {view === "milestones" && <div className="content">
         <div className="page-title"><div><p>{tr("ROADMAP", "로드맵")}</p><h1>{tr("Milestones", "마일스톤")}</h1><h2>{tr("Keep scope honest and the whole studio moving together.", "범위를 명확히 하고 스튜디오 전체가 함께 나아가세요.")}</h2></div><button className="secondary-button">＋ {tr("New milestone", "새 마일스톤")}</button></div>
@@ -1024,7 +1106,15 @@ export default function Home() {
         <div className="account-grid"><section className="management-card account-hero"><div className="account-avatar">{accountInitials}</div><div><small>{session ? tr("SIGNED IN WITH SUPABASE", "SUPABASE로 로그인됨") : tr("SIGN IN TO EDIT", "수정하려면 로그인하세요")}</small><h2>{accountName}</h2><p>{accountEmail ?? tr("Secure workspace account", "안전한 워크스페이스 계정")}</p><span className="verified-badge">{session ? "✓ " + tr("Verified identity", "인증된 계정") : tr("Read-only access", "읽기 전용")}</span></div></section><section className="management-card account-details"><small>{tr("ACCOUNT DETAILS", "계정 정보")}</small><div className="detail-line"><span>{tr("Email", "이메일")}</span><b>{accountEmail ?? tr("Not signed in", "로그인하지 않음")}</b></div><div className="detail-line"><span>{tr("Workspace role", "워크스페이스 역할")}</span><b>{currentMember?.role ?? "Owner"}</b></div><div className="detail-line discipline-detail"><span>{tr("Primary discipline", "주요 분야")}</span>{currentMember ? <select value={currentMember.discipline} onChange={event => void updateMemberDiscipline(currentMember, event.target.value)}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select> : <b>Production</b>}</div><div className="detail-line"><span>{tr("Access", "접근 권한")}</span><b>{session ? tr("All projects", "모든 프로젝트") : tr("View only", "보기 전용")}</b></div></section><section className="management-card account-preferences"><small>NOTIFICATIONS</small><label className="toggle-row"><span><b>Assigned card updates</b><small>Changes to cards you own</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Milestone reminders</b><small>Three days before deadlines</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Studio activity</b><small>Daily collaboration summary</small></span><input type="checkbox" /></label></section><section className="management-card sessions-card"><small>SECURITY</small><h3>{session ? tr("Active session", "활성 세션") : tr("No active session", "활성 세션 없음")}</h3><p>{session ? tr("Signed in through Supabase · Current browser", "Supabase로 로그인 · 현재 브라우저") : tr("Sign in to create and edit shared cards.", "공유 카드를 만들고 수정하려면 로그인하세요.")}</p><span className="healthy-pill">{session ? tr("Protected", "보호됨") : tr("Read only", "읽기 전용")}</span></section></div>
       </div>}
     </section>
-    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal card-form-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Forge a card", "카드 만들기")}</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus placeholder={tr("What needs to happen?", "어떤 작업이 필요한가요?")}/></label><label>{tr("Description", "설명")}<textarea name="description" placeholder={tr("Add context, goals, or acceptance notes…", "배경, 목표 또는 완료 조건을 입력하세요…")}/></label><div className="form-row"><label className="discipline-field">{tr("Production discipline", "프로덕션 분야")}<span><select name="tag">{productionDisciplines.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select><button type="button" onClick={() => setDisciplineManagerOpen(true)}>{tr("Manage", "관리")}</button></span></label><label className="range-field"><span>{tr("Effort", "작업량")}<b>{createEffort}/10</b></span><input type="range" min="1" max="10" value={createEffort} onChange={event => setCreateEffort(Number(event.target.value))}/></label></div><div className="form-row"><label className="range-field priority-range"><span>{tr("Priority", "우선순위")}<b className={priorityTone(createPriority)}>{createPriority}/10</b></span><input type="range" min="1" max="10" value={createPriority} onChange={event => setCreatePriority(Number(event.target.value))}/></label><label className="date-field">{tr("Due date", "마감일")}<span><input type="date" value={createDueDate} onChange={event => setCreateDueDate(event.target.value)}/>{createDueDate && <button type="button" onClick={() => setCreateDueDate("")}>× {tr("Clear", "삭제")}</button>}</span></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={defaultProjectName}>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select></label><label>{tr("Column", "열")}<select value={createStatus} onChange={event => setCreateStatus(event.target.value as Status)}>{productionStages.map(status => <option value={status} key={status}>{columnNames[status] || statusLabel(status)}</option>)}</select></label></div><footer><button type="button" onClick={() => setCreateOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create card", "카드 만들기")}</button></footer></form></section></div>}
+    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal card-form-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Forge a card", "카드 만들기")}</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}>
+      <label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus placeholder={tr("What needs to happen?", "어떤 작업이 필요한가요?")}/></label>
+      <label>{tr("Description", "설명")}<textarea name="description" placeholder={tr("Add context, goals, or acceptance notes…", "배경, 목표 또는 완료 조건을 입력하세요…")}/></label>
+      <div className="form-row"><label className="discipline-field">{tr("Production discipline", "프로덕션 분야")}<span><select name="tag">{productionDisciplines.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select><button type="button" onClick={() => setDisciplineManagerOpen(true)}>{tr("Manage", "관리")}</button></span></label><label className="range-field"><span>{tr("Effort", "작업량")}<b>{createEffort}/10</b></span><input type="range" min="1" max="10" value={createEffort} onChange={event => setCreateEffort(Number(event.target.value))}/></label></div>
+      <div className="form-row"><label className="range-field priority-range"><span>{tr("Priority", "우선순위")}<b className={priorityTone(createPriority)}>{createPriority}/10</b></span><input type="range" min="1" max="10" value={createPriority} onChange={event => setCreatePriority(Number(event.target.value))}/></label><label className="date-field">{tr("Start date", "시작일")}<span><input type="date" value={createStartDate} max={createDueDate || undefined} onChange={event => setCreateStartDate(event.target.value)}/>{createStartDate && <button type="button" onClick={() => setCreateStartDate("")}>× {tr("Clear", "삭제")}</button>}</span></label></div>
+      <div className="form-row"><label className="date-field">{tr("Due date", "마감일")}<span><input type="date" value={createDueDate} min={createStartDate || undefined} onChange={event => setCreateDueDate(event.target.value)}/>{createDueDate && <button type="button" onClick={() => setCreateDueDate("")}>× {tr("Clear", "삭제")}</button>}</span></label><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={defaultProjectName}>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select></label></div>
+      <label>{tr("Column", "열")}<select value={createStatus} onChange={event => setCreateStatus(event.target.value as Status)}>{productionStages.map(status => <option value={status} key={status}>{columnNames[status] || statusLabel(status)}</option>)}</select></label>
+      <footer><button type="button" onClick={() => setCreateOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create card", "카드 만들기")}</button></footer>
+    </form></section></div>}
 
     {editColumn && <div className="modal-backdrop" onMouseDown={() => setEditColumn(null)}><section className="modal create-modal column-edit-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Rename column", "열 이름 변경")}><header><div><small>{tr("BOARD SETTINGS", "보드 설정")}</small><h2>{tr("Rename column", "열 이름 변경")}</h2></div><button onClick={() => setEditColumn(null)} aria-label="Close">×</button></header><form onSubmit={renameColumn}><label>{tr("Column name", "열 이름")}<input name="name" required autoFocus defaultValue={columnNames[editColumn] || statusLabel(editColumn)} maxLength={30} /></label><p className="form-help">{tr("This changes the label on this device; cards still keep their workflow stage.", "이 기기에서 표시되는 이름만 변경되며 카드의 작업 단계는 유지됩니다.")}</p><footer><button type="button" onClick={() => setEditColumn(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save name", "이름 저장")}</button></footer></form></section></div>}
 
@@ -1039,9 +1129,17 @@ export default function Home() {
     {editMember && <div className="modal-backdrop" onMouseDown={() => setEditMember(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit member", "멤버 수정")}><header><div><small>{tr("MEMBER ACCESS", "멤버 권한")}</small><h2>{tr("Edit member", "멤버 수정")}</h2></div><button onClick={() => setEditMember(null)} aria-label="Close">×</button></header><form onSubmit={saveMemberEdits}><label>{tr("Name", "이름")}<input name="name" required autoFocus defaultValue={editMember.name} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required defaultValue={editMember.email} /></label><div className="form-row"><label>{tr("Primary discipline", "주요 분야")}<select name="discipline" required defaultValue={editMember.discipline}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editMember.status}><option>Active</option><option>Invited</option></select></label></div><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role" defaultValue={editMember.role} disabled={editMember.role === "Owner"}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select>{editMember.role === "Owner" && <input type="hidden" name="role" value="Owner" />}</label><footer className="member-edit-footer">{editMember.role !== "Owner" ? <button className="danger-button" type="button" onClick={() => void removeMember(editMember)}>{tr("Remove member", "멤버 삭제")}</button> : <span />}<div><button type="button" onClick={() => setEditMember(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save member", "멤버 저장")}</button></div></footer></form></section></div>}
 
     {selected && !editCardOpen && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b className={`priority-detail ${priorityTone(selected.priority)}`}>P{selected.priority}</b><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><div className="detail-title-row"><div><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2></div><button className="edit-card-button" onClick={() => openCardEditor(selected)}>✎ {tr("Edit card", "카드 수정")}</button></div><p>{selected.description}</p><div className="detail-grid"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>{tr("DUE", "마감")}</small><b>◷ {selected.due}</b></div><div><small>{tr("PRIORITY", "우선순위")}</small><b className={`priority-text ${priorityTone(selected.priority)}`}>P{selected.priority}</b></div></div><label>{tr("Status", "상태")}<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option value={s} key={s}>{statusLabel(s)}</option>)}</select></label><div className="subtodo-section"><header><div><small>{tr("SUB-TASKS", "하위 작업")}</small><b>{completedSubTodos}/{selectedTodos.length}</b></div>{selectedTodos.length > 0 && <div className="subtodo-progress"><span style={{width:`${Math.round((completedSubTodos / selectedTodos.length) * 100)}%`}} /></div>}</header><div className="subtodo-list">{selectedTodos.map(todo => <div className={`subtodo-row ${todo.done ? "done" : ""}`} key={todo.id}><button className="subtodo-check" onClick={() => toggleSubTodo(selected.id, todo.id)} aria-label={todo.done ? tr("Mark incomplete", "미완료로 표시") : tr("Mark complete", "완료로 표시")}>{todo.done ? "✓" : ""}</button><span>{todo.text}</span><button className="subtodo-remove" onClick={() => removeSubTodo(selected.id, todo.id)} aria-label={tr("Remove sub-task", "하위 작업 삭제")}>×</button></div>)}{selectedTodos.length === 0 && <p className="subtodo-empty">{tr("No sub-tasks yet. Break this card into smaller steps.", "아직 하위 작업이 없습니다. 카드를 더 작은 단계로 나눠보세요.")}</p>}</div><form className="subtodo-form" onSubmit={addSubTodo}><input name="subTodo" placeholder={tr("Add a sub-task…", "하위 작업 추가…")} aria-label={tr("New sub-task", "새 하위 작업")} /><button type="submit">＋ {tr("Add", "추가")}</button></form></div></div></section></div>}
-    {selected && editCardOpen && <div className="modal-backdrop" onMouseDown={() => setEditCardOpen(false)}><section className="modal create-modal edit-card-modal card-form-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit card", "카드 수정")}><header><div><small>{tr("CARD DETAILS", "카드 정보")}</small><h2>{tr("Edit card", "카드 수정")}</h2></div><button onClick={() => setEditCardOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveCardEdits}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus defaultValue={selected.title} /></label><label>{tr("Description", "설명")}<textarea name="description" defaultValue={selected.description} /></label><div className="form-row"><label className="discipline-field">{tr("Production discipline", "프로덕션 분야")}<span><select name="tag" defaultValue={selected.tag}>{productionDisciplines.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select><button type="button" onClick={() => setDisciplineManagerOpen(true)}>{tr("Manage", "관리")}</button></span></label><label className="range-field"><span>{tr("Effort", "작업량")}<b>{editEffort}/10</b></span><input type="range" min="1" max="10" value={editEffort} onChange={event => setEditEffort(Number(event.target.value))}/></label></div><div className="form-row"><label className="range-field priority-range"><span>{tr("Priority", "우선순위")}<b className={priorityTone(editPriority)}>{editPriority}/10</b></span><input type="range" min="1" max="10" value={editPriority} onChange={event => setEditPriority(Number(event.target.value))}/></label><label className="date-field">{tr("Due date", "마감일")}<span><input type="date" value={editDueDate} onChange={event => setEditDueDate(event.target.value)}/>{editDueDate && <button type="button" onClick={() => setEditDueDate("")}>× {tr("Remove", "삭제")}</button>}</span></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={selected.project}>{activeProjects.map(projectItem => <option key={projectItem.id} value={projectItem.name}>{projectItem.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={selected.status}>{productionStages.map(status => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label></div><footer><button type="button" onClick={() => setEditCardOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save changes", "변경 사항 저장")}</button></footer></form></section></div>}
+    {selected && editCardOpen && <div className="modal-backdrop" onMouseDown={() => setEditCardOpen(false)}><section className="modal create-modal edit-card-modal card-form-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit card", "카드 수정")}><header><div><small>{tr("CARD DETAILS", "카드 정보")}</small><h2>{tr("Edit card", "카드 수정")}</h2></div><button onClick={() => setEditCardOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveCardEdits}>
+      <label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus defaultValue={selected.title} /></label><label>{tr("Description", "설명")}<textarea name="description" defaultValue={selected.description} /></label>
+      <div className="form-row"><label className="discipline-field">{tr("Production discipline", "프로덕션 분야")}<span><select name="tag" defaultValue={selected.tag}>{productionDisciplines.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select><button type="button" onClick={() => setDisciplineManagerOpen(true)}>{tr("Manage", "관리")}</button></span></label><label className="range-field"><span>{tr("Effort", "작업량")}<b>{editEffort}/10</b></span><input type="range" min="1" max="10" value={editEffort} onChange={event => setEditEffort(Number(event.target.value))}/></label></div>
+      <div className="form-row"><label className="range-field priority-range"><span>{tr("Priority", "우선순위")}<b className={priorityTone(editPriority)}>{editPriority}/10</b></span><input type="range" min="1" max="10" value={editPriority} onChange={event => setEditPriority(Number(event.target.value))}/></label><label className="date-field">{tr("Start date", "시작일")}<span><input type="date" value={editStartDate} max={editDueDate || undefined} onChange={event => setEditStartDate(event.target.value)}/>{editStartDate && <button type="button" onClick={() => setEditStartDate("")}>× {tr("Remove", "삭제")}</button>}</span></label></div>
+      <div className="form-row"><label className="date-field">{tr("Due date", "마감일")}<span><input type="date" value={editDueDate} min={editStartDate || undefined} onChange={event => setEditDueDate(event.target.value)}/>{editDueDate && <button type="button" onClick={() => setEditDueDate("")}>× {tr("Remove", "삭제")}</button>}</span></label><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={selected.project}>{activeProjects.map(projectItem => <option key={projectItem.id} value={projectItem.name}>{projectItem.name}</option>)}</select></label></div>
+      <label>{tr("Status", "상태")}<select name="status" defaultValue={selected.status}>{productionStages.map(status => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label>
+      <footer><button type="button" onClick={() => setEditCardOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save changes", "변경 사항 저장")}</button></footer>
+    </form></section></div>}
     {disciplineManagerOpen && <div className="modal-backdrop discipline-manager-backdrop" onMouseDown={() => setDisciplineManagerOpen(false)}><section className="modal create-modal production-discipline-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Manage production disciplines", "프로덕션 분야 관리")}><header><div><small>{tr("CARD SETTINGS", "카드 설정")}</small><h2>{tr("Production disciplines", "프로덕션 분야")}</h2></div><button onClick={() => setDisciplineManagerOpen(false)} aria-label="Close">×</button></header><form className="production-discipline-add" onSubmit={addProductionDiscipline}><input value={newProductionDiscipline} onChange={event => setNewProductionDiscipline(event.target.value)} placeholder={tr("New discipline", "새 분야")}/><button className="create-button" type="submit">＋ {tr("Add", "추가")}</button></form><div className="production-discipline-list">{productionDisciplines.map(item => editingProductionDiscipline?.id === item.id ? <form key={item.id} onSubmit={renameProductionDiscipline}><input name="name" defaultValue={item.name} autoFocus/><button type="submit">{tr("Save", "저장")}</button><button type="button" onClick={() => setEditingProductionDiscipline(null)}>×</button></form> : <article key={item.id}><i className={item.color}/><b>{item.name}</b><small>{cards.filter(card => card.tag === item.name).length} {tr("cards", "개 카드")}</small><button type="button" disabled={item.name === "General"} onClick={() => setEditingProductionDiscipline(item)}>✎</button><button type="button" className="danger-button" disabled={item.name === "General"} onClick={() => void deleteProductionDiscipline(item)}>×</button></article>)}</div><p className="form-help">{tr("Renaming updates every card. Deleting moves cards to General.", "이름 변경은 모든 카드에 반영됩니다. 삭제한 분야의 카드는 General로 이동합니다.")}</p></section></div>}
     {authOpen && <div className="modal-backdrop" onMouseDown={() => setAuthOpen(false)}><section className="modal create-modal auth-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Questdeck account", "Questdeck 계정")}><header><div><small>QUESTDECK ACCOUNT</small><h2>{authMode === "signin" ? tr("Welcome back", "다시 오신 것을 환영합니다") : tr("Create your account", "계정 만들기")}</h2></div><button onClick={() => setAuthOpen(false)} aria-label="Close">×</button></header><button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button><div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div><form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<footer className="auth-footer"><button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Create account", "계정 만들기") : tr("I already have an account", "이미 계정이 있어요")}</button><button className="create-button" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Sign up", "가입하기")}</button></footer></form></section></div>}
+    {documentEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setDocumentEditorOpen(false); setEditingDocument(null); }}><section className="modal create-modal document-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Document editor", "문서 편집기")}><header><div><small>{tr("WORKSPACE DOCUMENT", "워크스페이스 문서")}</small><h2>{editingDocument ? tr("Edit document", "문서 수정") : tr("New document", "새 문서")}</h2></div><button onClick={() => { setDocumentEditorOpen(false); setEditingDocument(null); }} aria-label="Close">×</button></header><form onSubmit={saveDocument}><label>{tr("Title", "제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingDocument?.title ?? ""} placeholder={tr("Document title", "문서 제목")}/></label><label>{tr("Content", "내용")}<textarea className="document-editor" name="content" defaultValue={editingDocument?.content ?? ""} placeholder={tr("Write notes, decisions, links, or a production brief…", "메모, 결정 사항, 링크 또는 프로덕션 브리프를 작성하세요…")}/></label>{editingDocument?.isPublished && <div className="published-note"><b>{tr("This document is published", "이 문서는 공개되어 있습니다")}</b><p>{tr("Saving changes updates the shared link immediately.", "저장한 변경 사항은 공유 링크에 즉시 반영됩니다.")}</p></div>}<footer><button type="button" onClick={() => { setDocumentEditorOpen(false); setEditingDocument(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save document", "문서 저장")}</button></footer></form></section></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
