@@ -266,11 +266,15 @@ export default function Home() {
   const [documentComments, setDocumentComments] = useState<DocumentComment[]>([]);
   const [documentCommentsOpen, setDocumentCommentsOpen] = useState(true);
   const documentEditorRef = useRef<HTMLDivElement | null>(null);
+  const documentSelectionRef = useRef<Range | null>(null);
+  const documentTableCellRef = useRef<HTMLTableCellElement | null>(null);
   const documentImageInputRef = useRef<HTMLInputElement | null>(null);
   const documentSaveRequest = useRef(0);
   const [documentImageUploading, setDocumentImageUploading] = useState(false);
   const [documentExportOpen, setDocumentExportOpen] = useState(false);
   const [documentExportBusy, setDocumentExportBusy] = useState(false);
+  const [documentTableMenuOpen, setDocumentTableMenuOpen] = useState(false);
+  const [documentTableSize, setDocumentTableSize] = useState({ rows: 2, columns: 2 });
   const [milestones, setMilestones] = useState<Milestone[]>(initialMilestones);
   const [milestoneEditorOpen, setMilestoneEditorOpen] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
@@ -472,6 +476,21 @@ export default function Home() {
     const timer = window.setTimeout(() => void saveDocumentDraft(false), 1100);
     return () => window.clearTimeout(timer);
   }, [documentEditorOpen, editingDocument?.id, documentDraftTitle, documentDraftContent, documentDirty]);
+  useEffect(() => {
+    const editor = documentEditorRef.current;
+    if (!documentEditorOpen || !editor) return;
+    const remember = () => rememberDocumentSelection();
+    editor.addEventListener("keydown", handleDocumentKeyDown);
+    editor.addEventListener("keyup", remember);
+    editor.addEventListener("mouseup", remember);
+    document.addEventListener("selectionchange", remember);
+    return () => {
+      editor.removeEventListener("keydown", handleDocumentKeyDown);
+      editor.removeEventListener("keyup", remember);
+      editor.removeEventListener("mouseup", remember);
+      document.removeEventListener("selectionchange", remember);
+    };
+  }, [documentEditorOpen, editingDocument?.id, documentDraftTitle]);
   useEffect(() => {
     const shareSlug = new URLSearchParams(window.location.search).get("document");
     if (!shareSlug || !/^[0-9a-f-]{36}$/i.test(shareSlug)) return;
@@ -1296,7 +1315,7 @@ export default function Home() {
     const accessToken = requireSession();
     if (!accessToken || !editingDocument) return;
     const request = ++documentSaveRequest.current;
-    const document = { ...editingDocument, title: documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"), content: sanitizeRichText(documentDraftContent) };
+    const document = { ...editingDocument, title: documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"), content: sanitizeRichText(documentEditorRef.current?.innerHTML ?? documentDraftContent) };
     setDocumentSaveState("saving");
     try {
       const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>("update_document", { document }, accessToken);
@@ -1325,9 +1344,32 @@ export default function Home() {
     setDocumentSaveState("unsaved");
   }
 
+  function rememberDocumentSelection() {
+    const editor = documentEditorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return;
+    documentSelectionRef.current = range.cloneRange();
+    const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer as Element : range.startContainer.parentElement;
+    documentTableCellRef.current = element?.closest("td,th") as HTMLTableCellElement | null;
+  }
+
+  function restoreDocumentSelection() {
+    const editor = documentEditorRef.current;
+    const range = documentSelectionRef.current;
+    if (!editor) return;
+    editor.focus();
+    if (!range || !editor.contains(range.commonAncestorContainer)) return;
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
   function formatDocument(command: string, value?: string) {
-    documentEditorRef.current?.focus();
+    restoreDocumentSelection();
     document.execCommand(command, false, value);
+    rememberDocumentSelection();
     updateDocumentContent();
   }
 
@@ -1337,8 +1379,86 @@ export default function Home() {
     formatDocument("createLink", url);
   }
 
-  function insertDocumentTable() {
-    formatDocument("insertHTML", "<table><tbody><tr><th>Heading</th><th>Heading</th></tr><tr><td>Cell</td><td>Cell</td></tr></tbody></table><p><br></p>");
+  function insertDocumentTable(rows: number | unknown = 2, columns: number | unknown = 2) {
+    const rowCount = typeof rows === "number" ? Math.max(1, Math.min(5, rows)) : 2;
+    const columnCount = typeof columns === "number" ? Math.max(1, Math.min(5, columns)) : 2;
+    const tableRows = Array.from({ length: rowCount }, (_, row) => `<tr>${Array.from({ length: columnCount }, () => row === 0 ? "<th>Heading</th>" : "<td>Cell</td>").join("")}</tr>`).join("");
+    formatDocument("insertHTML", `<table><tbody>${tableRows}</tbody></table><p><br></p>`);
+    setDocumentTableMenuOpen(false);
+  }
+
+  function activeDocumentCell() {
+    rememberDocumentSelection();
+    return documentTableCellRef.current;
+  }
+
+  function mutateDocumentTable(action: "add-row" | "add-column" | "delete-row" | "delete-column") {
+    const cell = activeDocumentCell();
+    const row = cell?.parentElement as HTMLTableRowElement | null;
+    const table = cell?.closest<HTMLTableElement>("table");
+    if (!cell || !row || !table) { setToast(tr("Place the cursor inside a table cell first", "먼저 표 셀 안에 커서를 놓으세요")); return; }
+    if (action === "add-row") {
+      const next = table.insertRow(row.rowIndex + 1);
+      for (let index = 0; index < row.cells.length; index += 1) next.insertCell().textContent = tr("Cell", "셀");
+      documentTableCellRef.current = next.cells[0];
+    } else if (action === "add-column") {
+      const columnIndex = cell.cellIndex + 1;
+      Array.from(table.rows).forEach((tableRow, rowIndex) => {
+        const nextCell = document.createElement(rowIndex === 0 ? "th" : "td");
+        nextCell.textContent = rowIndex === 0 ? tr("Heading", "제목") : tr("Cell", "셀");
+        tableRow.insertBefore(nextCell, tableRow.cells[columnIndex] ?? null);
+      });
+      documentTableCellRef.current = table.rows[row.rowIndex]?.cells[columnIndex] ?? cell;
+    } else if (action === "delete-row") {
+      if (table.rows.length <= 1) { table.remove(); documentTableCellRef.current = null; }
+      else { table.deleteRow(row.rowIndex); documentTableCellRef.current = table.rows[Math.min(row.rowIndex, table.rows.length - 1)]?.cells[Math.min(cell.cellIndex, table.rows[0].cells.length - 1)] ?? null; }
+    } else {
+      if (row.cells.length <= 1) { table.remove(); documentTableCellRef.current = null; }
+      else { const columnIndex = cell.cellIndex; Array.from(table.rows).forEach(tableRow => tableRow.deleteCell(columnIndex)); documentTableCellRef.current = table.rows[Math.min(row.rowIndex, table.rows.length - 1)]?.cells[Math.min(columnIndex, table.rows[0].cells.length - 1)] ?? null; }
+    }
+    updateDocumentContent();
+    const nextCell = documentTableCellRef.current;
+    if (nextCell) {
+      const range = document.createRange();
+      range.selectNodeContents(nextCell);
+      range.collapse(false);
+      documentSelectionRef.current = range;
+      restoreDocumentSelection();
+    }
+  }
+
+  function handleDocumentKeyDown(event: KeyboardEvent) {
+    const modifier = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    if (modifier && key === "s") { event.preventDefault(); updateDocumentContent(); void saveDocumentDraft(false); return; }
+    if (modifier && key === "b") { event.preventDefault(); formatDocument("bold"); return; }
+    if (modifier && key === "i") { event.preventDefault(); formatDocument("italic"); return; }
+    if (modifier && key === "u") { event.preventDefault(); formatDocument("underline"); return; }
+    if (modifier && key === "z") { event.preventDefault(); formatDocument(event.shiftKey ? "redo" : "undo"); return; }
+    if (modifier && (key === "y" || (event.shiftKey && key === "z"))) { event.preventDefault(); formatDocument("redo"); return; }
+    if (modifier && event.shiftKey && key === "7") { event.preventDefault(); formatDocument("insertOrderedList"); return; }
+    if (modifier && event.shiftKey && key === "8") { event.preventDefault(); formatDocument("insertUnorderedList"); return; }
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    const cell = activeDocumentCell();
+    if (cell) {
+      const table = cell.closest<HTMLTableElement>("table")!;
+      const cells = Array.from(table.querySelectorAll<HTMLTableCellElement>("th,td"));
+      let nextIndex = cells.indexOf(cell) + (event.shiftKey ? -1 : 1);
+      if (nextIndex >= cells.length) { mutateDocumentTable("add-row"); return; }
+      nextIndex = Math.max(0, nextIndex);
+      const range = document.createRange();
+      range.selectNodeContents(cells[nextIndex]);
+      range.collapse(false);
+      documentSelectionRef.current = range;
+      documentTableCellRef.current = cells[nextIndex];
+      restoreDocumentSelection();
+      return;
+    }
+    const selection = window.getSelection();
+    const element = selection?.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode as Element : selection?.anchorNode?.parentElement;
+    if (element?.closest("li")) formatDocument(event.shiftKey ? "outdent" : "indent");
+    else if (!event.shiftKey) formatDocument("insertText", "    ");
   }
 
   async function uploadDocumentImage(event: ChangeEvent<HTMLInputElement>) {
@@ -1972,6 +2092,7 @@ export default function Home() {
     {authOpen && <div className="modal-backdrop" onMouseDown={() => setAuthOpen(false)}><section className="modal create-modal auth-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Questdeck account", "Questdeck 계정")}><header><div><small>QUESTDECK ACCOUNT</small><h2>{authMode === "signin" ? tr("Welcome back", "다시 오신 것을 환영합니다") : tr("Create your account", "계정 만들기")}</h2></div><button onClick={() => setAuthOpen(false)} aria-label="Close">×</button></header><button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button><div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div><form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<footer className="auth-footer"><button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Create account", "계정 만들기") : tr("I already have an account", "이미 계정이 있어요")}</button><button className="create-button" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Sign up", "가입하기")}</button></footer></form></section></div>}
     {documentEditorOpen && editingDocument && <div className="document-studio" role="dialog" aria-modal="true" aria-label={tr("Document editor", "문서 편집기")}><header className="document-studio-topbar"><button className="document-back" onClick={() => void saveDocumentDraft(true)} aria-label={tr("Back to documents", "문서 목록으로 돌아가기")}>←</button><span className="brand-mark">Q</span><div><input value={documentDraftTitle} maxLength={200} onChange={event => { setDocumentDraftTitle(event.target.value); setDocumentDirty(true); setDocumentSaveState("unsaved"); }} aria-label={tr("Document title", "문서 제목")} /><small className={documentSaveState}>{documentSaveState === "saving" ? tr("Saving…", "저장 중…") : documentSaveState === "unsaved" ? tr("Unsaved changes", "저장되지 않은 변경") : `✓ ${tr("Saved to workspace", "워크스페이스에 저장됨")}`}</small></div><button className={`document-publish-state ${editingDocument.isPublished ? "published" : ""}`} onClick={() => void setDocumentPublished({ ...editingDocument, title: documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"), content: sanitizeRichText(documentDraftContent) }, !editingDocument.isPublished)}>{editingDocument.isPublished ? `● ${tr("Published", "공개됨")}` : `○ ${tr("Private", "비공개")}`}</button><button className={`document-comment-toggle ${documentCommentsOpen ? "active" : ""}`} onClick={() => setDocumentCommentsOpen(open => !open)}>◌ {documentComments.length}</button><button className="create-button document-done" onClick={() => void saveDocumentDraft(true)}>✓ {tr("Done", "완료")}</button></header><div className="document-studio-toolbar" role="toolbar" aria-label={tr("Document formatting", "문서 서식")}><select defaultValue="p" onChange={event => formatDocument("formatBlock", event.target.value)} aria-label={tr("Text style", "텍스트 스타일")}><option value="p">{tr("Normal text", "본문")}</option><option value="h1">{tr("Heading 1", "제목 1")}</option><option value="h2">{tr("Heading 2", "제목 2")}</option><option value="h3">{tr("Heading 3", "제목 3")}</option><option value="blockquote">{tr("Quote", "인용")}</option></select><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("bold")} aria-label={tr("Bold", "굵게")}><b>B</b></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("italic")} aria-label={tr("Italic", "기울임")}><i>I</i></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("underline")} aria-label={tr("Underline", "밑줄")}><u>U</u></button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertUnorderedList")} aria-label={tr("Bullet list", "글머리 기호")}>• ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertOrderedList")} aria-label={tr("Numbered list", "번호 목록")}>1. ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={addDocumentLink} aria-label={tr("Add link", "링크 추가")}>↗</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={insertDocumentTable} aria-label={tr("Insert table", "표 삽입")}>▦</button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("undo")} aria-label={tr("Undo", "실행 취소")}>↶</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("redo")} aria-label={tr("Redo", "다시 실행")}>↷</button></div><main className={`document-studio-main ${documentCommentsOpen ? "with-comments" : ""}`}><section className="document-canvas-wrap"><form className="document-canvas" onSubmit={saveDocument}><div ref={documentEditorRef} className="document-rich-editor rich-document-content" contentEditable suppressContentEditableWarning data-placeholder={tr("Start writing your document…", "문서 작성을 시작하세요…")} onInput={updateDocumentContent} dangerouslySetInnerHTML={{ __html: documentDraftContent }} /><footer><span>{richTextExcerpt(documentDraftContent).split(/\s+/).filter(Boolean).length} {tr("words", "단어")}</span><button type="submit">{tr("Save now", "지금 저장")}</button></footer></form></section>{documentCommentsOpen && <aside className="document-comments"><header><div><small>{tr("DISCUSSION", "토론")}</small><h3>{tr("Document comments", "문서 댓글")}</h3></div><button onClick={() => setDocumentCommentsOpen(false)}>×</button></header><div className="document-comment-list">{documentComments.map(comment => <article key={comment.id}><span>{comment.authorName.split(/\s+/).map(part => part[0]).join("").slice(0,2).toUpperCase()}</span><div><header><b>{comment.authorName || comment.authorEmail}</b><small>{new Date(comment.createdAt).toLocaleString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" })}</small></header><p>{comment.body}</p></div>{comment.userId === session?.user.id && <button onClick={() => void deleteDocumentComment(comment)} aria-label={tr("Delete comment", "댓글 삭제")}>×</button>}</article>)}{documentComments.length === 0 && <div className="document-comments-empty"><span>◌</span><b>{tr("No comments yet", "아직 댓글이 없습니다")}</b><p>{tr("Start a discussion about this document.", "이 문서에 대한 토론을 시작하세요.")}</p></div>}</div><form onSubmit={addDocumentComment}><textarea name="comment" maxLength={1200} required placeholder={tr("Add a comment…", "댓글 추가…")} /><button className="create-button" type="submit">＋ {tr("Comment", "댓글")}</button></form></aside>}</main></div>}
     {documentEditorOpen && editingDocument && <div className="document-image-attach"><button type="button" onClick={() => documentImageInputRef.current?.click()} disabled={documentImageUploading || documentExportBusy} aria-label={tr("Attach image", "이미지 첨부")}>{documentImageUploading ? "…" : "▧"}<span>{documentImageUploading ? tr("Uploading…", "업로드 중…") : tr("Attach image", "이미지 첨부")}</span></button><div className="document-export-control"><button type="button" onClick={() => setDocumentExportOpen(open => !open)} disabled={documentExportBusy} aria-expanded={documentExportOpen} aria-label={tr("Export document", "문서 내보내기")}>{documentExportBusy ? "…" : "⇩"}<span>{documentExportBusy ? tr("Preparing…", "준비 중…") : tr("Export", "내보내기")}</span></button>{documentExportOpen && <div className="document-export-menu"><button type="button" onClick={() => void exportDocument("doc")}><b>W</b><span>{tr("Word document", "Word 문서")}<small>.doc</small></span></button><button type="button" onClick={() => void exportDocument("html")}><b>⌘</b><span>{tr("Web document", "웹 문서")}<small>.html</small></span></button><button type="button" onClick={() => void printDocument()}><b>▤</b><span>{tr("Print or save PDF", "인쇄 또는 PDF 저장")}<small>{tr("Uses your print dialog", "인쇄 창 사용")}</small></span></button></div>}</div><input ref={documentImageInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadDocumentImage}/></div>}
+    {documentEditorOpen && editingDocument && <aside className="document-editor-assist" aria-label={tr("Table tools and keyboard shortcuts", "표 도구 및 키보드 단축키")}><div className="document-table-assist"><button type="button" className={documentTableMenuOpen ? "active" : ""} onMouseDown={event => { event.preventDefault(); rememberDocumentSelection(); }} onClick={() => setDocumentTableMenuOpen(open => !open)}>▦ <span>{tr("Table", "표")}</span></button>{documentTableMenuOpen && <section className="document-table-picker"><header><b>{tr("Insert a table", "표 삽입")}</b><span>{documentTableSize.rows} × {documentTableSize.columns}</span></header><div>{Array.from({length:25},(_,index) => { const row=Math.floor(index/5)+1; const column=index%5+1; const active=row<=documentTableSize.rows&&column<=documentTableSize.columns; return <button type="button" className={active ? "active" : ""} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setDocumentTableSize({rows:row,columns:column})} onFocus={() => setDocumentTableSize({rows:row,columns:column})} onClick={() => insertDocumentTable(row,column)} aria-label={tr(`Insert ${row} by ${column} table`, `${row}행 ${column}열 표 삽입`)} key={`${row}-${column}`} />;})}</div><small>{tr("Hover to choose rows and columns", "행과 열 개수를 선택하세요")}</small></section>}</div><div className="document-cell-actions"><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => mutateDocumentTable("add-row")} title={tr("Add row below", "아래에 행 추가")}>＋R</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => mutateDocumentTable("add-column")} title={tr("Add column right", "오른쪽에 열 추가")}>＋C</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => mutateDocumentTable("delete-row")} title={tr("Delete row", "행 삭제")}>−R</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => mutateDocumentTable("delete-column")} title={tr("Delete column", "열 삭제")}>−C</button></div><details className="document-shortcuts"><summary>⌨ <span>{tr("Shortcuts", "단축키")}</span></summary><div><b>{tr("Editor shortcuts", "편집기 단축키")}</b><p><kbd>Ctrl/⌘ B</kbd>{tr("Bold", "굵게")}</p><p><kbd>Ctrl/⌘ I</kbd>{tr("Italic", "기울임")}</p><p><kbd>Ctrl/⌘ U</kbd>{tr("Underline", "밑줄")}</p><p><kbd>Ctrl/⌘ Z</kbd>{tr("Undo", "실행 취소")}</p><p><kbd>Ctrl/⌘ Y</kbd>{tr("Redo", "다시 실행")}</p><p><kbd>Ctrl/⌘ S</kbd>{tr("Save now", "지금 저장")}</p><p><kbd>Tab</kbd>{tr("Next cell / indent", "다음 셀 / 들여쓰기")}</p><p><kbd>Shift Tab</kbd>{tr("Previous cell / outdent", "이전 셀 / 내어쓰기")}</p><p><kbd>Ctrl/⌘ Shift 7</kbd>{tr("Numbered list", "번호 목록")}</p><p><kbd>Ctrl/⌘ Shift 8</kbd>{tr("Bullet list", "글머리 기호")}</p></div></details></aside>}
     {cardHoverPreview && <aside className="card-hover-preview" style={{ left: cardHoverPreview.left, top: cardHoverPreview.top } as CSSProperties} role="tooltip" aria-label={tr("Card preview", "카드 미리보기")}>
       <header className={`card-accent ${cardHoverPreview.card.color}`}><span>{cardHoverPreview.card.tag}</span><b className={`priority-badge ${priorityTone(cardHoverPreview.card.priority)}`}>P{cardHoverPreview.card.priority}</b></header>
       <div className="card-hover-preview-body"><div className="card-hover-kicker"><span>{cardHoverPreview.card.project}</span><b className={`preview-status status-${cardHoverPreview.card.status.toLowerCase().replace(" ", "-")}`}>{statusLabel(cardHoverPreview.card.status)}</b></div><h3>{cardHoverPreview.card.title}</h3><p>{cardHoverPreview.card.description || tr("No description yet.", "아직 설명이 없습니다.")}</p><div className="card-hover-facts"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{cardHoverPreview.card.owner}</span>{members.find(member => member.initials === cardHoverPreview.card.owner)?.name ?? tr("Unassigned", "담당자 없음")}</b></div><div><small>{tr("SCHEDULE", "일정")}</small><b>◷ {cardHoverPreview.card.startDate ? `${dueLabelFromInput(cardHoverPreview.card.startDate)} → ` : ""}{cardHoverPreview.card.due}</b></div><div><small>{tr("EFFORT", "작업량")}</small><b>{cardHoverPreview.card.points}/10</b></div><div><small>{tr("PRIORITY", "우선순위")}</small><b className={`priority-text ${priorityTone(cardHoverPreview.card.priority)}`}>P{cardHoverPreview.card.priority}</b></div></div>{cardHoverPreview.total > 0 && <div className="card-hover-subtasks"><span><i style={{ width: `${(cardHoverPreview.completed / cardHoverPreview.total) * 100}%` }} /></span><b>☑ {cardHoverPreview.completed}/{cardHoverPreview.total} {tr("subtasks", "하위 작업")}</b></div>}<footer>{tr("Click to open full card", "클릭하면 전체 카드를 엽니다")}</footer></div>

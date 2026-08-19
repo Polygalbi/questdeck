@@ -36,3 +36,16 @@ test("includes the high-volume board and backup controls", async () => {
   assert.match(css, /board-density-compact/);
   assert.match(css, /\.column-cards\{[^}]*overflow-y:auto/);
 });
+
+test("includes working document editing and table controls", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /rememberDocumentSelection/);
+  assert.match(page, /handleDocumentKeyDown/);
+  assert.match(page, /document-table-picker/);
+  assert.match(page, /mutateDocumentTable/);
+  assert.match(css, /\.rich-document-content ol\{list-style:decimal/);
+  assert.match(css, /\.document-editor-assist/);
+});
