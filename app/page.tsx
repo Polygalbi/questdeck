@@ -5,7 +5,7 @@ import { createClient, type Session } from "@supabase/supabase-js";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
 type View = "overview" | "quests" | "timeline" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
-type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; color: string; status: Status; project: string; due: string };
+type Card = { id: number; title: string; description: string; tag: string; owner: string; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null };
 type Account = { displayName: string; email: string; fullName: string | null };
 type RoleName = "Owner" | "Admin" | "Member" | "Guest";
 type PermissionKey = "view_projects" | "edit_cards" | "manage_members" | "workspace_settings" | "billing_security";
@@ -16,6 +16,7 @@ type Workspace = { id: string; name: string; initials: string; members: number; 
 type Notification = { id: number; title: string; detail: string; time: string; icon: string; tone: string; read: boolean; destination: View };
 type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
 type SubTodo = { id: number; text: string; done: boolean };
+type ProductionDiscipline = { id: number; name: string; color: string };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -31,6 +32,8 @@ type SupabaseCard = {
   color: string;
   status: Status;
   due_label: string;
+  due_date: string | null;
+  priority: number;
   questdeck_projects: { name: string };
 };
 
@@ -48,14 +51,14 @@ async function syncQuestdeck<T = { ok: boolean }>(action: string, payload: Recor
 }
 
 const initialCards: Card[] = [
-  { id: 1, title: "Tune player movement", description: "Make traversal feel crisp and responsive before the next playtest.", tag: "GAMEPLAY", owner: "MK", points: 3, color: "violet", status: "In progress", project: "Project Nightfall", due: "Today" },
-  { id: 2, title: "Forest ambience pass", description: "Layer environmental loops for the northern forest biome.", tag: "AUDIO", owner: "JL", points: 2, color: "mint", status: "Ready", project: "Project Nightfall", due: "Today" },
-  { id: 3, title: "Boss arena concept", description: "Explore three silhouettes and arena lighting directions.", tag: "ART", owner: "AS", points: 5, color: "coral", status: "Review", project: "Project Nightfall", due: "Tomorrow" },
-  { id: 4, title: "Controller remapping", description: "Allow players to fully remap gamepad controls.", tag: "ENGINEERING", owner: "NK", points: 5, color: "blue-card", status: "Ready", project: "Project Nightfall", due: "Aug 22" },
-  { id: 5, title: "Steam page refresh", description: "Update key art, capsule copy, and screenshots for the showcase.", tag: "MARKETING", owner: "JR", points: 3, color: "amber-card", status: "In progress", project: "Marketing", due: "Aug 21" },
-  { id: 6, title: "Chapter two dialogue", description: "Final narrative edit and implementation notes.", tag: "NARRATIVE", owner: "JK", points: 2, color: "rose-card", status: "Review", project: "Project Nightfall", due: "Aug 23" },
-  { id: 7, title: "Playtest build 0.8", description: "Lock the candidate build and verify critical paths.", tag: "RELEASE", owner: "MK", points: 8, color: "violet", status: "Done", project: "Project Nightfall", due: "Aug 16" },
-  { id: 8, title: "New starter checklist", description: "Document local setup and first-week studio rituals.", tag: "STUDIO", owner: "AS", points: 1, color: "mint", status: "Done", project: "Studio Ops", due: "Aug 15" },
+  { id: 1, title: "Tune player movement", description: "Make traversal feel crisp and responsive before the next playtest.", tag: "Gameplay", owner: "MK", points: 3, priority: 9, color: "violet", status: "In progress", project: "Project Nightfall", due: "Today", dueDate: "2026-08-18" },
+  { id: 2, title: "Forest ambience pass", description: "Layer environmental loops for the northern forest biome.", tag: "Audio", owner: "JL", points: 2, priority: 7, color: "mint", status: "Ready", project: "Project Nightfall", due: "Today", dueDate: "2026-08-18" },
+  { id: 3, title: "Boss arena concept", description: "Explore three silhouettes and arena lighting directions.", tag: "Art", owner: "AS", points: 5, priority: 10, color: "coral", status: "Review", project: "Project Nightfall", due: "Tomorrow", dueDate: "2026-08-19" },
+  { id: 4, title: "Controller remapping", description: "Allow players to fully remap gamepad controls.", tag: "Engineering", owner: "NK", points: 5, priority: 8, color: "blue-card", status: "Ready", project: "Project Nightfall", due: "Aug 22", dueDate: "2026-08-22" },
+  { id: 5, title: "Steam page refresh", description: "Update key art, capsule copy, and screenshots for the showcase.", tag: "Marketing", owner: "JR", points: 3, priority: 6, color: "amber-card", status: "In progress", project: "Marketing", due: "Aug 21", dueDate: "2026-08-21" },
+  { id: 6, title: "Chapter two dialogue", description: "Final narrative edit and implementation notes.", tag: "Narrative", owner: "JK", points: 2, priority: 5, color: "rose-card", status: "Review", project: "Project Nightfall", due: "Aug 23", dueDate: "2026-08-23" },
+  { id: 7, title: "Playtest build 0.8", description: "Lock the candidate build and verify critical paths.", tag: "Release", owner: "MK", points: 8, priority: 10, color: "violet", status: "Done", project: "Project Nightfall", due: "Aug 16", dueDate: "2026-08-16" },
+  { id: 8, title: "New starter checklist", description: "Document local setup and first-week studio rituals.", tag: "Studio", owner: "AS", points: 1, priority: 3, color: "mint", status: "Done", project: "Studio Ops", due: "Aug 15", dueDate: "2026-08-15" },
 ];
 
 const initialProjects: Project[] = [
@@ -66,6 +69,13 @@ const initialProjects: Project[] = [
 
 const productionStages: Status[] = ["Ready", "In progress", "Review", "Done"];
 const initialDisciplines = ["Production", "Game Design", "Engineering", "Art", "Audio", "Narrative", "Marketing", "QA", "General"];
+const initialProductionDisciplines: ProductionDiscipline[] = [
+  { id: 1, name: "Gameplay", color: "violet" }, { id: 2, name: "Art", color: "coral" },
+  { id: 3, name: "Audio", color: "mint" }, { id: 4, name: "Engineering", color: "blue-card" },
+  { id: 5, name: "Narrative", color: "rose-card" }, { id: 6, name: "Marketing", color: "amber-card" },
+  { id: 7, name: "Release", color: "violet" }, { id: 8, name: "Studio", color: "mint" },
+  { id: 9, name: "General", color: "blue-card" },
+];
 
 const initialMembers: Member[] = [
   { id: 1000, name: "Polygalbi", email: "polygalbi@gmail.com", initials: "PO", role: "Owner", discipline: "Production", status: "Active" },
@@ -143,9 +153,20 @@ function timelineDateLabel(date: Date) {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function dueLabelFromInput(value: string) {
+  if (!value) return "No date";
+  return timelineDateLabel(new Date(`${value}T12:00:00`));
+}
+
+function priorityTone(priority: number) {
+  if (priority >= 8) return "critical";
+  if (priority >= 5) return "high";
+  return "normal";
+}
+
 function QuestCard({ card, onOpen, compact = false, todoSummary }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number } }) {
-  return <button className={`quest-card ${compact ? "compact" : ""}`} onClick={() => onOpen(card)} aria-label={`Open ${card.title}`}>
-    <div className={`card-accent ${card.color}`}><span>{card.tag}</span><b>{card.points}</b></div>
+  return <button className={`quest-card priority-${priorityTone(card.priority)} ${compact ? "compact" : ""}`} onClick={() => onOpen(card)} aria-label={`Open ${card.title}`}>
+    <div className={`card-accent ${card.color}`}><span>{card.tag}</span><b className={`priority-badge ${priorityTone(card.priority)}`}>P{card.priority}</b><b>{card.points}</b></div>
     <div className="card-body"><small>{card.project.toUpperCase()}</small><h4>{card.title}</h4>{!compact && <p>{card.description}</p>}{todoSummary && todoSummary.total > 0 && <div className="card-subtask-progress" aria-label={`${todoSummary.completed} of ${todoSummary.total} sub-tasks complete`}><span><i style={{width:`${(todoSummary.completed / todoSummary.total) * 100}%`}} /></span><b>☑ {todoSummary.completed}/{todoSummary.total}</b></div>}<div className="card-footer"><span className="avatar">{card.owner}</span><span>◷ {card.due}</span><span>◌ {card.id % 4}</span></div></div>
   </button>;
 }
@@ -158,6 +179,18 @@ export default function Home() {
   const [project, setProject] = useState("All projects");
   const [createOpen, setCreateOpen] = useState(false);
   const [createStatus, setCreateStatus] = useState<Status>("Ready");
+  const [createEffort, setCreateEffort] = useState(3);
+  const [createPriority, setCreatePriority] = useState(5);
+  const [createDueDate, setCreateDueDate] = useState("");
+  const [editEffort, setEditEffort] = useState(3);
+  const [editPriority, setEditPriority] = useState(5);
+  const [editDueDate, setEditDueDate] = useState("");
+  const [productionDisciplines, setProductionDisciplines] = useState(initialProductionDisciplines);
+  const [disciplineManagerOpen, setDisciplineManagerOpen] = useState(false);
+  const [newProductionDiscipline, setNewProductionDiscipline] = useState("");
+  const [editingProductionDiscipline, setEditingProductionDiscipline] = useState<ProductionDiscipline | null>(null);
+  const [boardSort, setBoardSort] = useState<"Default" | "Priority" | "Due date" | "Effort">("Default");
+  const [priorityFilter, setPriorityFilter] = useState<"All" | "Critical" | "High" | "Normal">("All");
   const [activeColumnMenu, setActiveColumnMenu] = useState<Status | null>(null);
   const [editColumn, setEditColumn] = useState<Status | null>(null);
   const [columnNames, setColumnNames] = useState<Partial<Record<Status, string>>>({});
@@ -206,7 +239,7 @@ export default function Home() {
   useEffect(() => {
     const headers = { apikey: SUPABASE_PUBLISHABLE_KEY };
     Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,color,status,due_label,questdeck_projects(name)&order=id.asc`, { headers }).then(response => {
+      fetch(`${SUPABASE_URL}/rest/v1/questdeck_cards?select=id,title,description,tag,owner_initials,points,priority,color,status,due_label,due_date,questdeck_projects(name)&order=id.asc`, { headers }).then(response => {
         if (!response.ok) throw new Error("Supabase card request failed");
         return response.json() as Promise<SupabaseCard[]>;
       }),
@@ -218,7 +251,7 @@ export default function Home() {
       .then(([remoteCards, remoteSubTodos]) => {
         const mapped = remoteCards.map(card => ({
           id: card.id, title: card.title, description: card.description, tag: card.tag, owner: card.owner_initials,
-          points: card.points, color: card.color, status: card.status, project: card.questdeck_projects.name, due: card.due_label,
+          points: card.points, priority: card.priority ?? 5, color: card.color, status: card.status, project: card.questdeck_projects.name, due: card.due_label || "No date", dueDate: card.due_date,
         } satisfies Card));
         setCards(mapped);
 
@@ -235,6 +268,12 @@ export default function Home() {
     void supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
     return () => subscription.unsubscribe();
+  }, []);
+  useEffect(() => {
+    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_disciplines?select=id,name,color&order=created_at.asc`, { headers: { apikey: SUPABASE_PUBLISHABLE_KEY } })
+      .then(response => response.ok ? response.json() : Promise.reject(new Error("Discipline request failed")))
+      .then((items: ProductionDiscipline[]) => { if (items.length) setProductionDisciplines(items); })
+      .catch(() => undefined);
   }, []);
   useEffect(() => {
     if (!session?.access_token) {
@@ -300,11 +339,19 @@ export default function Home() {
 
   const filtered = useMemo(() => {
     const archivedProjectNames = new Set(projects.filter(item => item.status === "Archived").map(item => item.name));
-    return cards.filter(card => {
-    const matchesQuery = `${card.title} ${card.description} ${card.tag} ${card.project}`.toLowerCase().includes(query.toLowerCase());
-      return !archivedProjectNames.has(card.project) && matchesQuery && (project === "All projects" || card.project === project);
+    const visible = cards.filter(card => {
+      const matchesQuery = `${card.title} ${card.description} ${card.tag} ${card.project}`.toLowerCase().includes(query.toLowerCase());
+      const tone = priorityTone(card.priority);
+      const matchesPriority = priorityFilter === "All" || (priorityFilter === "Critical" && tone === "critical") || (priorityFilter === "High" && tone === "high") || (priorityFilter === "Normal" && tone === "normal");
+      return !archivedProjectNames.has(card.project) && matchesQuery && matchesPriority && (project === "All projects" || card.project === project);
     });
-  }, [cards, projects, query, project]);
+    return [...visible].sort((a, b) => {
+      if (boardSort === "Priority") return b.priority - a.priority;
+      if (boardSort === "Effort") return b.points - a.points;
+      if (boardSort === "Due date") return (a.dueDate ?? "9999-12-31").localeCompare(b.dueDate ?? "9999-12-31");
+      return a.id - b.id;
+    });
+  }, [boardSort, cards, priorityFilter, projects, query, project]);
 
   function requireSession() {
     if (session?.access_token) return session.access_token;
@@ -355,9 +402,11 @@ export default function Home() {
     const accessToken = requireSession();
     if (!accessToken) return;
     const data = new FormData(event.currentTarget);
+    const tag = String(data.get("tag"));
+    const discipline = productionDisciplines.find(item => item.name === tag);
     const newCard: Card = {
       id: Date.now(), title: String(data.get("title")), description: String(data.get("description") || "A newly forged quest, ready for the team."),
-      tag: String(data.get("tag")), owner: "JK", points: Number(data.get("points")), color: "violet", status: createStatus, project: String(data.get("project")), due: "New",
+      tag, owner: "JK", points: createEffort, priority: createPriority, color: discipline?.color ?? "violet", status: createStatus, project: String(data.get("project")), due: dueLabelFromInput(createDueDate), dueDate: createDueDate || null,
     };
     setCards(prev => [newCard, ...prev]); setCreateOpen(false); setToast("Card added to your deck"); setView("quests");
     void syncQuestdeck("create_card", { card: newCard }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
@@ -365,9 +414,19 @@ export default function Home() {
 
   function openCreateCard(status: Status = "Ready") {
     setCreateStatus(status);
+    setCreateEffort(3);
+    setCreatePriority(5);
+    setCreateDueDate("");
     setActiveColumnMenu(null);
     if (session) setCreateOpen(true);
     else setAuthOpen(true);
+  }
+
+  function openCardEditor(card: Card) {
+    setEditEffort(card.points);
+    setEditPriority(card.priority);
+    setEditDueDate(card.dueDate ?? "");
+    setEditCardOpen(true);
   }
 
   function renameColumn(event: FormEvent<HTMLFormElement>) {
@@ -602,6 +661,57 @@ export default function Home() {
     }
   }
 
+  async function addProductionDiscipline(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const accessToken = requireSession();
+    const name = newProductionDiscipline.trim();
+    if (!accessToken || !name) return;
+    if (productionDisciplines.some(item => item.name.toLowerCase() === name.toLowerCase())) {
+      setToast(tr("That production discipline already exists", "이미 존재하는 프로덕션 분야입니다"));
+      return;
+    }
+    const colors = ["violet", "coral", "mint", "blue-card", "rose-card", "amber-card"];
+    try {
+      const result = await syncQuestdeck<{ discipline: ProductionDiscipline }>("add_discipline", { name, color: colors[productionDisciplines.length % colors.length] }, accessToken);
+      setProductionDisciplines(current => [...current.filter(item => item.name !== "General"), result.discipline, ...current.filter(item => item.name === "General")]);
+      setNewProductionDiscipline("");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not add discipline", "분야를 추가하지 못했습니다"));
+    }
+  }
+
+  async function renameProductionDiscipline(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingProductionDiscipline || editingProductionDiscipline.name === "General") return;
+    const accessToken = requireSession();
+    const data = new FormData(event.currentTarget);
+    const name = String(data.get("name")).trim();
+    if (!accessToken || !name) return;
+    try {
+      await syncQuestdeck("rename_discipline", { id: editingProductionDiscipline.id, name }, accessToken);
+      setProductionDisciplines(current => current.map(item => item.id === editingProductionDiscipline.id ? { ...item, name } : item));
+      setCards(current => current.map(card => card.tag === editingProductionDiscipline.name ? { ...card, tag: name } : card));
+      setSelected(current => current?.tag === editingProductionDiscipline.name ? { ...current, tag: name } : current);
+      setEditingProductionDiscipline(null);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not rename discipline", "분야 이름을 변경하지 못했습니다"));
+    }
+  }
+
+  async function deleteProductionDiscipline(item: ProductionDiscipline) {
+    if (item.name === "General" || !window.confirm(tr(`Delete ${item.name}? Cards will move to General.`, `${item.name} 분야를 삭제할까요? 카드는 General로 이동합니다.`))) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    try {
+      await syncQuestdeck("delete_discipline", { id: item.id }, accessToken);
+      setProductionDisciplines(current => current.filter(discipline => discipline.id !== item.id));
+      setCards(current => current.map(card => card.tag === item.name ? { ...card, tag: "General", color: "blue-card" } : card));
+      setSelected(current => current?.tag === item.name ? { ...current, tag: "General", color: "blue-card" } : current);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not delete discipline", "분야를 삭제하지 못했습니다"));
+    }
+  }
+
   async function createProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const accessToken = requireSession();
@@ -725,9 +835,12 @@ export default function Home() {
       title: String(data.get("title")),
       description: String(data.get("description")),
       tag: String(data.get("tag")),
-      points: Number(data.get("points")),
+      points: editEffort,
+      priority: editPriority,
+      color: productionDisciplines.find(item => item.name === String(data.get("tag")))?.color ?? selected.color,
       project: String(data.get("project")),
-      due: String(data.get("due")),
+      due: dueLabelFromInput(editDueDate),
+      dueDate: editDueDate || null,
       status: String(data.get("status")) as Status,
     };
     setCards(current => current.map(card => card.id === updated.id ? updated : card));
@@ -765,7 +878,7 @@ export default function Home() {
     const statusOrder: Record<Status, number> = { Ready: 0, "In progress": 1, Review: 2, Done: 3 };
     return cards
       .filter(card => activeNames.has(card.project) && (project === "All projects" || card.project === project))
-      .map(card => ({ card, date: cardDueDate(card.due) }))
+      .map(card => ({ card, date: card.dueDate ? new Date(`${card.dueDate}T12:00:00`) : cardDueDate(card.due) }))
       .filter((item): item is { card: Card; date: Date } => Boolean(item.date))
       .filter(item => item.date >= timelineStart && item.date <= timelineEnd)
       .sort((a, b) => {
@@ -781,7 +894,8 @@ export default function Home() {
     if (!accessToken) return;
     const previous = cards.find(card => card.id === cardId);
     if (!previous) return;
-    const updated = { ...previous, due: timelineDateLabel(date) };
+    const dueDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const updated = { ...previous, due: timelineDateLabel(date), dueDate };
     setCards(current => current.map(card => card.id === cardId ? updated : card));
     setSelected(current => current?.id === cardId ? updated : current);
     setDraggedTimelineCard(null);
@@ -851,7 +965,7 @@ export default function Home() {
       {view === "activity" && <div className="content activity-content"><div className="page-title"><div><p>{tr("WORKSPACE PULSE", "워크스페이스 소식")}</p><h1>{tr("Activity", "활동")}</h1><h2>{tr("Every meaningful change across your studio, in one timeline.", "스튜디오의 모든 주요 변경 사항을 한 타임라인에서 확인하세요.")}</h2></div><div className="activity-actions"><select value={activityFilter} onChange={event => setActivityFilter(event.target.value)} aria-label={tr("Filter activity", "활동 필터")}><option value="All activity">{tr("All activity", "모든 활동")}</option><option value="Cards">{tr("Cards", "카드")}</option><option value="Comments">{tr("Comments", "댓글")}</option><option value="Milestones">{tr("Milestones", "마일스톤")}</option><option value="Team">{tr("Team", "팀")}</option></select><button className="secondary-button" onClick={() => setToast(tr("Activity marked as reviewed", "모든 활동을 확인했습니다"))}>{tr("Mark all reviewed", "모두 확인")}</button></div></div><div className="activity-layout"><section className="management-card activity-feed"><header><div><small>{tr("RECENT CHANGES", "최근 변경")}</small><h3>{visibleActivity.length} {tr("events", "개 활동")}</h3></div><span className="live-indicator"><i /> {tr("Live", "실시간")}</span></header><div className="activity-day"><span>{tr("TODAY", "오늘")}</span></div>{visibleActivity.slice(0,4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}{visibleActivity.length > 4 && <><div className="activity-day"><span>{tr("YESTERDAY", "어제")}</span></div>{visibleActivity.slice(4).map(item => <article className="activity-event" key={item.id}><span className={`event-avatar ${item.tone}`}>{item.initials}</span><div className="event-copy"><p><b>{item.person}</b> {item.action} <strong>{item.target}</strong></p><blockquote>{item.detail}</blockquote><small>{item.project} · {item.time}</small></div><span className="event-type">{item.type}</span><button aria-label={`More options for ${item.target}`}>•••</button></article>)}</>}</section><aside className="activity-summary"><section className="management-card"><small>{tr("THIS WEEK", "이번 주")}</small><div className="summary-stat"><strong>42</strong><span>{tr("Cards updated", "카드 업데이트")}</span></div><div className="summary-stat"><strong>18</strong><span>{tr("Completed", "완료")}</span></div><div className="summary-stat"><strong>27</strong><span>{tr("Comments", "댓글")}</span></div></section><section className="management-card contributors"><small>{tr("TOP CONTRIBUTORS", "주요 기여자")}</small>{initialMembers.slice(1,4).map((member,index) => <div key={member.id}><span className="member-avatar">{member.initials}</span><p><b>{member.name}</b><small>{12-index*3} {tr("updates", "개 업데이트")}</small></p><strong>#{index+1}</strong></div>)}</section></aside></div></div>}
 
       {view === "quests" && <div className="content board-content">
-        <div className="page-title"><div><p>{tr("PRODUCTION", "프로덕션")}</p><h1>{tr("Production board", "프로덕션 보드")}</h1><h2>{tr("Move every quest from idea to shipped.", "모든 퀘스트를 아이디어에서 출시까지 진행하세요.")}</h2></div><div className="board-actions"><select value={project} onChange={e => setProject(e.target.value)} aria-label={tr("Filter by project", "프로젝트 필터")}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select><button onClick={() => { setProject("All projects"); setQuery(""); }}>{tr("Clear filters", "필터 초기화")}</button></div></div>
+        <div className="page-title"><div><p>{tr("PRODUCTION", "프로덕션")}</p><h1>{tr("Production board", "프로덕션 보드")}</h1><h2>{tr("Move every quest from idea to shipped.", "모든 퀘스트를 아이디어에서 출시까지 진행하세요.")}</h2></div><div className="board-actions"><select value={project} onChange={e => setProject(e.target.value)} aria-label={tr("Filter by project", "프로젝트 필터")}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select><select value={priorityFilter} onChange={event => setPriorityFilter(event.target.value as typeof priorityFilter)} aria-label={tr("Filter by priority", "우선순위 필터")}><option value="All">{tr("All priorities", "모든 우선순위")}</option><option value="Critical">{tr("Critical · 8–10", "긴급 · 8–10")}</option><option value="High">{tr("High · 5–7", "높음 · 5–7")}</option><option value="Normal">{tr("Normal · 1–4", "보통 · 1–4")}</option></select><select value={boardSort} onChange={event => setBoardSort(event.target.value as typeof boardSort)} aria-label={tr("Sort cards", "카드 정렬")}><option value="Default">{tr("Default order", "기본 순서")}</option><option value="Priority">{tr("Priority: high first", "우선순위 높은 순")}</option><option value="Due date">{tr("Due date", "마감일")}</option><option value="Effort">{tr("Effort: high first", "작업량 높은 순")}</option></select><button onClick={() => { setProject("All projects"); setPriorityFilter("All"); setBoardSort("Default"); setQuery(""); }}>{tr("Clear filters", "필터 초기화")}</button></div></div>
         <div className="board">
           {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className="board-column" key={status}><header><span className={`status-dot s${index}`}/><h3>{columnNames[status] || statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><div className="column-menu-wrap"><button className={`column-menu-trigger ${activeColumnMenu === status ? "active" : ""}`} onClick={() => setActiveColumnMenu(current => current === status ? null : status)} aria-label={`${columnNames[status] || statusLabel(status)} ${tr("options", "옵션")}`} aria-expanded={activeColumnMenu === status}>•••</button>{activeColumnMenu === status && <div className="column-menu" role="menu"><button role="menuitem" onClick={() => openCreateCard(status)}>＋ <span>{tr("Add card here", "여기에 카드 추가")}</span></button><button role="menuitem" onClick={() => { setEditColumn(status); setActiveColumnMenu(null); }}>✎ <span>{tr("Rename column", "열 이름 변경")}</span></button>{columnNames[status] && <button role="menuitem" onClick={() => resetColumnName(status)}>↺ <span>{tr("Reset name", "기본 이름 복원")}</span></button>}</div>}</div></header><div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}<button className="add-inline" onClick={() => openCreateCard(status)}>＋ {tr("Add a card", "카드 추가")}</button></div></section>)}
         </div>
@@ -898,8 +1012,7 @@ export default function Home() {
         <div className="account-grid"><section className="management-card account-hero"><div className="account-avatar">{accountInitials}</div><div><small>{session ? tr("SIGNED IN WITH SUPABASE", "SUPABASE로 로그인됨") : tr("SIGN IN TO EDIT", "수정하려면 로그인하세요")}</small><h2>{accountName}</h2><p>{accountEmail ?? tr("Secure workspace account", "안전한 워크스페이스 계정")}</p><span className="verified-badge">{session ? "✓ " + tr("Verified identity", "인증된 계정") : tr("Read-only access", "읽기 전용")}</span></div></section><section className="management-card account-details"><small>{tr("ACCOUNT DETAILS", "계정 정보")}</small><div className="detail-line"><span>{tr("Email", "이메일")}</span><b>{accountEmail ?? tr("Not signed in", "로그인하지 않음")}</b></div><div className="detail-line"><span>{tr("Workspace role", "워크스페이스 역할")}</span><b>{currentMember?.role ?? "Owner"}</b></div><div className="detail-line discipline-detail"><span>{tr("Primary discipline", "주요 분야")}</span>{currentMember ? <select value={currentMember.discipline} onChange={event => void updateMemberDiscipline(currentMember, event.target.value)}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select> : <b>Production</b>}</div><div className="detail-line"><span>{tr("Access", "접근 권한")}</span><b>{session ? tr("All projects", "모든 프로젝트") : tr("View only", "보기 전용")}</b></div></section><section className="management-card account-preferences"><small>NOTIFICATIONS</small><label className="toggle-row"><span><b>Assigned card updates</b><small>Changes to cards you own</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Milestone reminders</b><small>Three days before deadlines</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Studio activity</b><small>Daily collaboration summary</small></span><input type="checkbox" /></label></section><section className="management-card sessions-card"><small>SECURITY</small><h3>{session ? tr("Active session", "활성 세션") : tr("No active session", "활성 세션 없음")}</h3><p>{session ? tr("Signed in through Supabase · Current browser", "Supabase로 로그인 · 현재 브라우저") : tr("Sign in to create and edit shared cards.", "공유 카드를 만들고 수정하려면 로그인하세요.")}</p><span className="healthy-pill">{session ? tr("Protected", "보호됨") : tr("Read only", "읽기 전용")}</span></section></div>
       </div>}
     </section>
-
-    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Forge a card", "카드 만들기")}</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus placeholder={tr("What needs to happen?", "어떤 작업이 필요한가요?")}/></label><label>{tr("Description", "설명")}<textarea name="description" placeholder={tr("Add context, goals, or acceptance notes…", "배경, 목표 또는 완료 조건을 입력하세요…")}/></label><div className="form-row"><label>{tr("Discipline", "분야")}<select name="tag"><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option></select></label><label>{tr("Effort", "작업량")}<select name="points"><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={defaultProjectName}>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select></label><label>{tr("Column", "열")}<select value={createStatus} onChange={event => setCreateStatus(event.target.value as Status)}>{productionStages.map(status => <option value={status} key={status}>{columnNames[status] || statusLabel(status)}</option>)}</select></label></div><footer><button type="button" onClick={() => setCreateOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create card", "카드 만들기")}</button></footer></form></section></div>}
+    {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal card-form-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Forge a card", "카드 만들기")}</h2></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus placeholder={tr("What needs to happen?", "어떤 작업이 필요한가요?")}/></label><label>{tr("Description", "설명")}<textarea name="description" placeholder={tr("Add context, goals, or acceptance notes…", "배경, 목표 또는 완료 조건을 입력하세요…")}/></label><div className="form-row"><label className="discipline-field">{tr("Production discipline", "프로덕션 분야")}<span><select name="tag">{productionDisciplines.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select><button type="button" onClick={() => setDisciplineManagerOpen(true)}>{tr("Manage", "관리")}</button></span></label><label className="range-field"><span>{tr("Effort", "작업량")}<b>{createEffort}/10</b></span><input type="range" min="1" max="10" value={createEffort} onChange={event => setCreateEffort(Number(event.target.value))}/></label></div><div className="form-row"><label className="range-field priority-range"><span>{tr("Priority", "우선순위")}<b className={priorityTone(createPriority)}>{createPriority}/10</b></span><input type="range" min="1" max="10" value={createPriority} onChange={event => setCreatePriority(Number(event.target.value))}/></label><label className="date-field">{tr("Due date", "마감일")}<span><input type="date" value={createDueDate} onChange={event => setCreateDueDate(event.target.value)}/>{createDueDate && <button type="button" onClick={() => setCreateDueDate("")}>× {tr("Clear", "삭제")}</button>}</span></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={defaultProjectName}>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select></label><label>{tr("Column", "열")}<select value={createStatus} onChange={event => setCreateStatus(event.target.value as Status)}>{productionStages.map(status => <option value={status} key={status}>{columnNames[status] || statusLabel(status)}</option>)}</select></label></div><footer><button type="button" onClick={() => setCreateOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create card", "카드 만들기")}</button></footer></form></section></div>}
 
     {editColumn && <div className="modal-backdrop" onMouseDown={() => setEditColumn(null)}><section className="modal create-modal column-edit-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Rename column", "열 이름 변경")}><header><div><small>{tr("BOARD SETTINGS", "보드 설정")}</small><h2>{tr("Rename column", "열 이름 변경")}</h2></div><button onClick={() => setEditColumn(null)} aria-label="Close">×</button></header><form onSubmit={renameColumn}><label>{tr("Column name", "열 이름")}<input name="name" required autoFocus defaultValue={columnNames[editColumn] || statusLabel(editColumn)} maxLength={30} /></label><p className="form-help">{tr("This changes the label on this device; cards still keep their workflow stage.", "이 기기에서 표시되는 이름만 변경되며 카드의 작업 단계는 유지됩니다.")}</p><footer><button type="button" onClick={() => setEditColumn(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save name", "이름 저장")}</button></footer></form></section></div>}
 
@@ -913,9 +1026,9 @@ export default function Home() {
 
     {editMember && <div className="modal-backdrop" onMouseDown={() => setEditMember(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit member", "멤버 수정")}><header><div><small>{tr("MEMBER ACCESS", "멤버 권한")}</small><h2>{tr("Edit member", "멤버 수정")}</h2></div><button onClick={() => setEditMember(null)} aria-label="Close">×</button></header><form onSubmit={saveMemberEdits}><label>{tr("Name", "이름")}<input name="name" required autoFocus defaultValue={editMember.name} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required defaultValue={editMember.email} /></label><div className="form-row"><label>{tr("Primary discipline", "주요 분야")}<select name="discipline" required defaultValue={editMember.discipline}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editMember.status}><option>Active</option><option>Invited</option></select></label></div><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role" defaultValue={editMember.role} disabled={editMember.role === "Owner"}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select>{editMember.role === "Owner" && <input type="hidden" name="role" value="Owner" />}</label><footer className="member-edit-footer">{editMember.role !== "Owner" ? <button className="danger-button" type="button" onClick={() => void removeMember(editMember)}>{tr("Remove member", "멤버 삭제")}</button> : <span />}<div><button type="button" onClick={() => setEditMember(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save member", "멤버 저장")}</button></div></footer></form></section></div>}
 
-    {selected && !editCardOpen && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><div className="detail-title-row"><div><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2></div><button className="edit-card-button" onClick={() => setEditCardOpen(true)}>✎ {tr("Edit card", "카드 수정")}</button></div><p>{selected.description}</p><div className="detail-grid"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>{tr("DUE", "마감")}</small><b>◷ {selected.due}</b></div></div><label>{tr("Status", "상태")}<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option value={s} key={s}>{statusLabel(s)}</option>)}</select></label><div className="subtodo-section"><header><div><small>{tr("SUB-TASKS", "하위 작업")}</small><b>{completedSubTodos}/{selectedTodos.length}</b></div>{selectedTodos.length > 0 && <div className="subtodo-progress"><span style={{width:`${Math.round((completedSubTodos / selectedTodos.length) * 100)}%`}} /></div>}</header><div className="subtodo-list">{selectedTodos.map(todo => <div className={`subtodo-row ${todo.done ? "done" : ""}`} key={todo.id}><button className="subtodo-check" onClick={() => toggleSubTodo(selected.id, todo.id)} aria-label={todo.done ? tr("Mark incomplete", "미완료로 표시") : tr("Mark complete", "완료로 표시")}>{todo.done ? "✓" : ""}</button><span>{todo.text}</span><button className="subtodo-remove" onClick={() => removeSubTodo(selected.id, todo.id)} aria-label={tr("Remove sub-task", "하위 작업 삭제")}>×</button></div>)}{selectedTodos.length === 0 && <p className="subtodo-empty">{tr("No sub-tasks yet. Break this card into smaller steps.", "아직 하위 작업이 없습니다. 카드를 더 작은 단계로 나눠보세요.")}</p>}</div><form className="subtodo-form" onSubmit={addSubTodo}><input name="subTodo" placeholder={tr("Add a sub-task…", "하위 작업 추가…")} aria-label={tr("New sub-task", "새 하위 작업")} /><button type="submit">＋ {tr("Add", "추가")}</button></form></div></div></section></div>}
-
-    {selected && editCardOpen && <div className="modal-backdrop" onMouseDown={() => setEditCardOpen(false)}><section className="modal create-modal edit-card-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit card", "카드 수정")}><header><div><small>{tr("CARD DETAILS", "카드 정보")}</small><h2>{tr("Edit card", "카드 수정")}</h2></div><button onClick={() => setEditCardOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveCardEdits}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus defaultValue={selected.title} /></label><label>{tr("Description", "설명")}<textarea name="description" defaultValue={selected.description} /></label><div className="form-row"><label>{tr("Discipline", "분야")}<select name="tag" defaultValue={selected.tag}><option>GAMEPLAY</option><option>ART</option><option>AUDIO</option><option>ENGINEERING</option><option>NARRATIVE</option><option>MARKETING</option><option>RELEASE</option><option>STUDIO</option></select></label><label>{tr("Effort", "작업량")}<select name="points" defaultValue={selected.points}><option value="1">1 point</option><option value="2">2 points</option><option value="3">3 points</option><option value="5">5 points</option><option value="8">8 points</option></select></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={selected.project}>{activeProjects.map(projectItem => <option key={projectItem.id} value={projectItem.name}>{projectItem.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={selected.status}>{productionStages.map(status => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label></div><label>{tr("Due date", "마감일")}<input name="due" defaultValue={selected.due} placeholder={tr("Today, Aug 24, or No date", "오늘, 8월 24일 또는 날짜 없음")} /></label><footer><button type="button" onClick={() => setEditCardOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save changes", "변경 사항 저장")}</button></footer></form></section></div>}
+    {selected && !editCardOpen && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b className={`priority-detail ${priorityTone(selected.priority)}`}>P{selected.priority}</b><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><div className="detail-title-row"><div><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2></div><button className="edit-card-button" onClick={() => openCardEditor(selected)}>✎ {tr("Edit card", "카드 수정")}</button></div><p>{selected.description}</p><div className="detail-grid"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{selected.owner}</span> Jamie Kim</b></div><div><small>{tr("DUE", "마감")}</small><b>◷ {selected.due}</b></div><div><small>{tr("PRIORITY", "우선순위")}</small><b className={`priority-text ${priorityTone(selected.priority)}`}>P{selected.priority}</b></div></div><label>{tr("Status", "상태")}<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option value={s} key={s}>{statusLabel(s)}</option>)}</select></label><div className="subtodo-section"><header><div><small>{tr("SUB-TASKS", "하위 작업")}</small><b>{completedSubTodos}/{selectedTodos.length}</b></div>{selectedTodos.length > 0 && <div className="subtodo-progress"><span style={{width:`${Math.round((completedSubTodos / selectedTodos.length) * 100)}%`}} /></div>}</header><div className="subtodo-list">{selectedTodos.map(todo => <div className={`subtodo-row ${todo.done ? "done" : ""}`} key={todo.id}><button className="subtodo-check" onClick={() => toggleSubTodo(selected.id, todo.id)} aria-label={todo.done ? tr("Mark incomplete", "미완료로 표시") : tr("Mark complete", "완료로 표시")}>{todo.done ? "✓" : ""}</button><span>{todo.text}</span><button className="subtodo-remove" onClick={() => removeSubTodo(selected.id, todo.id)} aria-label={tr("Remove sub-task", "하위 작업 삭제")}>×</button></div>)}{selectedTodos.length === 0 && <p className="subtodo-empty">{tr("No sub-tasks yet. Break this card into smaller steps.", "아직 하위 작업이 없습니다. 카드를 더 작은 단계로 나눠보세요.")}</p>}</div><form className="subtodo-form" onSubmit={addSubTodo}><input name="subTodo" placeholder={tr("Add a sub-task…", "하위 작업 추가…")} aria-label={tr("New sub-task", "새 하위 작업")} /><button type="submit">＋ {tr("Add", "추가")}</button></form></div></div></section></div>}
+    {selected && editCardOpen && <div className="modal-backdrop" onMouseDown={() => setEditCardOpen(false)}><section className="modal create-modal edit-card-modal card-form-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit card", "카드 수정")}><header><div><small>{tr("CARD DETAILS", "카드 정보")}</small><h2>{tr("Edit card", "카드 수정")}</h2></div><button onClick={() => setEditCardOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveCardEdits}><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus defaultValue={selected.title} /></label><label>{tr("Description", "설명")}<textarea name="description" defaultValue={selected.description} /></label><div className="form-row"><label className="discipline-field">{tr("Production discipline", "프로덕션 분야")}<span><select name="tag" defaultValue={selected.tag}>{productionDisciplines.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select><button type="button" onClick={() => setDisciplineManagerOpen(true)}>{tr("Manage", "관리")}</button></span></label><label className="range-field"><span>{tr("Effort", "작업량")}<b>{editEffort}/10</b></span><input type="range" min="1" max="10" value={editEffort} onChange={event => setEditEffort(Number(event.target.value))}/></label></div><div className="form-row"><label className="range-field priority-range"><span>{tr("Priority", "우선순위")}<b className={priorityTone(editPriority)}>{editPriority}/10</b></span><input type="range" min="1" max="10" value={editPriority} onChange={event => setEditPriority(Number(event.target.value))}/></label><label className="date-field">{tr("Due date", "마감일")}<span><input type="date" value={editDueDate} onChange={event => setEditDueDate(event.target.value)}/>{editDueDate && <button type="button" onClick={() => setEditDueDate("")}>× {tr("Remove", "삭제")}</button>}</span></label></div><div className="form-row"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={selected.project}>{activeProjects.map(projectItem => <option key={projectItem.id} value={projectItem.name}>{projectItem.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={selected.status}>{productionStages.map(status => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label></div><footer><button type="button" onClick={() => setEditCardOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save changes", "변경 사항 저장")}</button></footer></form></section></div>}
+    {disciplineManagerOpen && <div className="modal-backdrop discipline-manager-backdrop" onMouseDown={() => setDisciplineManagerOpen(false)}><section className="modal create-modal production-discipline-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Manage production disciplines", "프로덕션 분야 관리")}><header><div><small>{tr("CARD SETTINGS", "카드 설정")}</small><h2>{tr("Production disciplines", "프로덕션 분야")}</h2></div><button onClick={() => setDisciplineManagerOpen(false)} aria-label="Close">×</button></header><form className="production-discipline-add" onSubmit={addProductionDiscipline}><input value={newProductionDiscipline} onChange={event => setNewProductionDiscipline(event.target.value)} placeholder={tr("New discipline", "새 분야")}/><button className="create-button" type="submit">＋ {tr("Add", "추가")}</button></form><div className="production-discipline-list">{productionDisciplines.map(item => editingProductionDiscipline?.id === item.id ? <form key={item.id} onSubmit={renameProductionDiscipline}><input name="name" defaultValue={item.name} autoFocus/><button type="submit">{tr("Save", "저장")}</button><button type="button" onClick={() => setEditingProductionDiscipline(null)}>×</button></form> : <article key={item.id}><i className={item.color}/><b>{item.name}</b><small>{cards.filter(card => card.tag === item.name).length} {tr("cards", "개 카드")}</small><button type="button" disabled={item.name === "General"} onClick={() => setEditingProductionDiscipline(item)}>✎</button><button type="button" className="danger-button" disabled={item.name === "General"} onClick={() => void deleteProductionDiscipline(item)}>×</button></article>)}</div><p className="form-help">{tr("Renaming updates every card. Deleting moves cards to General.", "이름 변경은 모든 카드에 반영됩니다. 삭제한 분야의 카드는 General로 이동합니다.")}</p></section></div>}
     {authOpen && <div className="modal-backdrop" onMouseDown={() => setAuthOpen(false)}><section className="modal create-modal auth-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Questdeck account", "Questdeck 계정")}><header><div><small>QUESTDECK ACCOUNT</small><h2>{authMode === "signin" ? tr("Welcome back", "다시 오신 것을 환영합니다") : tr("Create your account", "계정 만들기")}</h2></div><button onClick={() => setAuthOpen(false)} aria-label="Close">×</button></header><button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button><div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div><form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<footer className="auth-footer"><button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Create account", "계정 만들기") : tr("I already have an account", "이미 계정이 있어요")}</button><button className="create-button" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Sign up", "가입하기")}</button></footer></form></section></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
