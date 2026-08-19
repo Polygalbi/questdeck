@@ -1502,7 +1502,7 @@ export default function Home() {
       totalCards: automaticStats.totalCards,
       note: String(data.get("note")).trim(),
       color: String(data.get("color")) as Milestone["color"],
-      stage: String(data.get("stage")).trim().toUpperCase(),
+      stage: String(data.get("stage")).trim(),
     };
     try {
       const result = await syncQuestdeck<{ milestone: SupabaseMilestone }>(editingMilestone ? "update_milestone" : "create_milestone", { milestone }, accessToken);
