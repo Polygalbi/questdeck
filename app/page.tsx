@@ -1,6 +1,6 @@
 "use client";
 
-import { DragEvent, FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
@@ -56,7 +56,10 @@ async function syncQuestdeck<T = { ok: boolean }>(action: string, payload: Recor
   return data as T;
 }
 
-const richTextTags = new Set(["p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "a", "table", "thead", "tbody", "tr", "th", "td", "hr"]);
+const DOCUMENT_IMAGE_BUCKET = "questdeck-document-images";
+const DOCUMENT_IMAGE_PUBLIC_PREFIX = `${SUPABASE_URL}/storage/v1/object/public/${DOCUMENT_IMAGE_BUCKET}/`;
+const documentImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const richTextTags = new Set(["p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "a", "table", "thead", "tbody", "tr", "th", "td", "hr", "figure", "figcaption", "img"]);
 function escapeHtml(value: string) { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;"); }
 function sanitizeRichText(value: string) {
   if (!/<[a-z][\s\S]*>/i.test(value)) return `<p>${escapeHtml(value).replace(/\n/g, "<br>")}</p>`;
@@ -68,6 +71,11 @@ function sanitizeRichText(value: string) {
       const href = attributes.match(/href\s*=\s*[\"']([^\"']+)[\"']/i)?.[1] ?? "";
       const safeHref = /^(https?:|mailto:)/i.test(href) ? escapeHtml(href) : "";
       return safeHref ? `<a href="${safeHref}" target="_blank" rel="noopener noreferrer">` : "<a>";
+    }
+    if (tag === "img") {
+      const src = attributes.match(/src\s*=\s*[\"']([^\"']+)[\"']/i)?.[1] ?? "";
+      const alt = attributes.match(/alt\s*=\s*[\"']([^\"']*)[\"']/i)?.[1] ?? "";
+      return src.startsWith(DOCUMENT_IMAGE_PUBLIC_PREFIX) ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">` : "";
     }
     return tag === "br" || tag === "hr" ? `<${tag}>` : `<${tag}>`;
   });
@@ -229,7 +237,9 @@ export default function Home() {
   const [documentComments, setDocumentComments] = useState<DocumentComment[]>([]);
   const [documentCommentsOpen, setDocumentCommentsOpen] = useState(true);
   const documentEditorRef = useRef<HTMLDivElement | null>(null);
+  const documentImageInputRef = useRef<HTMLInputElement | null>(null);
   const documentSaveRequest = useRef(0);
+  const [documentImageUploading, setDocumentImageUploading] = useState(false);
   const [milestones, setMilestones] = useState<Milestone[]>(initialMilestones);
   const [milestoneEditorOpen, setMilestoneEditorOpen] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
@@ -1116,6 +1126,26 @@ export default function Home() {
     formatDocument("insertHTML", "<table><tbody><tr><th>Heading</th><th>Heading</th></tr><tr><td>Cell</td><td>Cell</td></tr></tbody></table><p><br></p>");
   }
 
+  async function uploadDocumentImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !editingDocument || !session) return;
+    if (!documentImageTypes.has(file.type)) { setToast(tr("Use a JPG, PNG, WebP, or GIF image", "JPG, PNG, WebP 또는 GIF 이미지를 사용하세요")); return; }
+    if (file.size > 5 * 1024 * 1024) { setToast(tr("Image must be 5 MB or smaller", "이미지는 5MB 이하여야 합니다")); return; }
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "image";
+    const path = `${session.user.id}/${editingDocument.id}/${Date.now()}-${safeName}`;
+    setDocumentImageUploading(true);
+    try {
+      const { error } = await supabase.storage.from(DOCUMENT_IMAGE_BUCKET).upload(path, file, { cacheControl: "3600", contentType: file.type, upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from(DOCUMENT_IMAGE_BUCKET).getPublicUrl(path);
+      formatDocument("insertHTML", `<figure><img src="${escapeHtml(data.publicUrl)}" alt="${escapeHtml(file.name)}"><figcaption>${escapeHtml(file.name)}</figcaption></figure><p><br></p>`);
+      setToast(tr("Image added to the document", "문서에 이미지를 추가했습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not upload image", "이미지를 업로드하지 못했습니다"));
+    } finally { setDocumentImageUploading(false); }
+  }
+
   async function addDocumentComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editingDocument || !session) return;
@@ -1152,7 +1182,17 @@ export default function Home() {
     if (!window.confirm(tr(`Delete “${document.title}”?`, `“${document.title}” 문서를 삭제할까요?`))) return;
     const accessToken = requireSession();
     if (!accessToken) return;
-    try { await syncQuestdeck("delete_document", { documentId: document.id }, accessToken); setDocuments(current => current.filter(item => item.id !== document.id)); setToast(tr("Document deleted", "문서를 삭제했습니다")); }
+    try {
+      if (session) {
+        const imagePaths = Array.from(document.content.matchAll(new RegExp(`${DOCUMENT_IMAGE_PUBLIC_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\"']+)`, "g")))
+          .map(match => decodeURIComponent(match[1]))
+          .filter(path => path.startsWith(`${session.user.id}/${document.id}/`));
+        if (imagePaths.length) await supabase.storage.from(DOCUMENT_IMAGE_BUCKET).remove(imagePaths);
+      }
+      await syncQuestdeck("delete_document", { documentId: document.id }, accessToken);
+      setDocuments(current => current.filter(item => item.id !== document.id));
+      setToast(tr("Document deleted", "문서를 삭제했습니다"));
+    }
     catch (error) { setToast(error instanceof Error ? error.message : tr("Could not delete document", "문서를 삭제하지 못했습니다")); }
   }
 
@@ -1543,6 +1583,7 @@ export default function Home() {
     {nameEditorOpen && session && <div className="modal-backdrop" onMouseDown={() => setNameEditorOpen(false)}><section className="modal create-modal name-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit name", "이름 수정")}><header><div><small>{tr("PROFILE", "프로필")}</small><h2>{tr("Edit your name", "이름 수정")}</h2></div><button onClick={() => setNameEditorOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveAccountName}><label>{tr("Display name", "표시 이름")}<input name="displayName" required autoFocus maxLength={80} defaultValue={accountName} placeholder={tr("Your name", "이름")}/></label><p className="form-help">{tr("This name appears in your greeting, account page, and profile menu.", "이 이름은 인사말, 계정 페이지, 프로필 메뉴에 표시됩니다.")}</p><footer><button type="button" onClick={() => setNameEditorOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save name", "이름 저장")}</button></footer></form></section></div>}
     {authOpen && <div className="modal-backdrop" onMouseDown={() => setAuthOpen(false)}><section className="modal create-modal auth-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Questdeck account", "Questdeck 계정")}><header><div><small>QUESTDECK ACCOUNT</small><h2>{authMode === "signin" ? tr("Welcome back", "다시 오신 것을 환영합니다") : tr("Create your account", "계정 만들기")}</h2></div><button onClick={() => setAuthOpen(false)} aria-label="Close">×</button></header><button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button><div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div><form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<footer className="auth-footer"><button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Create account", "계정 만들기") : tr("I already have an account", "이미 계정이 있어요")}</button><button className="create-button" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Sign up", "가입하기")}</button></footer></form></section></div>}
     {documentEditorOpen && editingDocument && <div className="document-studio" role="dialog" aria-modal="true" aria-label={tr("Document editor", "문서 편집기")}><header className="document-studio-topbar"><button className="document-back" onClick={() => void saveDocumentDraft(true)} aria-label={tr("Back to documents", "문서 목록으로 돌아가기")}>←</button><span className="brand-mark">Q</span><div><input value={documentDraftTitle} maxLength={200} onChange={event => { setDocumentDraftTitle(event.target.value); setDocumentDirty(true); setDocumentSaveState("unsaved"); }} aria-label={tr("Document title", "문서 제목")} /><small className={documentSaveState}>{documentSaveState === "saving" ? tr("Saving…", "저장 중…") : documentSaveState === "unsaved" ? tr("Unsaved changes", "저장되지 않은 변경") : `✓ ${tr("Saved to workspace", "워크스페이스에 저장됨")}`}</small></div><button className={`document-publish-state ${editingDocument.isPublished ? "published" : ""}`} onClick={() => void setDocumentPublished({ ...editingDocument, title: documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"), content: sanitizeRichText(documentDraftContent) }, !editingDocument.isPublished)}>{editingDocument.isPublished ? `● ${tr("Published", "공개됨")}` : `○ ${tr("Private", "비공개")}`}</button><button className={`document-comment-toggle ${documentCommentsOpen ? "active" : ""}`} onClick={() => setDocumentCommentsOpen(open => !open)}>◌ {documentComments.length}</button><button className="create-button document-done" onClick={() => void saveDocumentDraft(true)}>✓ {tr("Done", "완료")}</button></header><div className="document-studio-toolbar" role="toolbar" aria-label={tr("Document formatting", "문서 서식")}><select defaultValue="p" onChange={event => formatDocument("formatBlock", event.target.value)} aria-label={tr("Text style", "텍스트 스타일")}><option value="p">{tr("Normal text", "본문")}</option><option value="h1">{tr("Heading 1", "제목 1")}</option><option value="h2">{tr("Heading 2", "제목 2")}</option><option value="h3">{tr("Heading 3", "제목 3")}</option><option value="blockquote">{tr("Quote", "인용")}</option></select><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("bold")} aria-label={tr("Bold", "굵게")}><b>B</b></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("italic")} aria-label={tr("Italic", "기울임")}><i>I</i></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("underline")} aria-label={tr("Underline", "밑줄")}><u>U</u></button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertUnorderedList")} aria-label={tr("Bullet list", "글머리 기호")}>• ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertOrderedList")} aria-label={tr("Numbered list", "번호 목록")}>1. ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={addDocumentLink} aria-label={tr("Add link", "링크 추가")}>↗</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={insertDocumentTable} aria-label={tr("Insert table", "표 삽입")}>▦</button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("undo")} aria-label={tr("Undo", "실행 취소")}>↶</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("redo")} aria-label={tr("Redo", "다시 실행")}>↷</button></div><main className={`document-studio-main ${documentCommentsOpen ? "with-comments" : ""}`}><section className="document-canvas-wrap"><form className="document-canvas" onSubmit={saveDocument}><div ref={documentEditorRef} className="document-rich-editor rich-document-content" contentEditable suppressContentEditableWarning data-placeholder={tr("Start writing your document…", "문서 작성을 시작하세요…")} onInput={updateDocumentContent} dangerouslySetInnerHTML={{ __html: documentDraftContent }} /><footer><span>{richTextExcerpt(documentDraftContent).split(/\s+/).filter(Boolean).length} {tr("words", "단어")}</span><button type="submit">{tr("Save now", "지금 저장")}</button></footer></form></section>{documentCommentsOpen && <aside className="document-comments"><header><div><small>{tr("DISCUSSION", "토론")}</small><h3>{tr("Document comments", "문서 댓글")}</h3></div><button onClick={() => setDocumentCommentsOpen(false)}>×</button></header><div className="document-comment-list">{documentComments.map(comment => <article key={comment.id}><span>{comment.authorName.split(/\s+/).map(part => part[0]).join("").slice(0,2).toUpperCase()}</span><div><header><b>{comment.authorName || comment.authorEmail}</b><small>{new Date(comment.createdAt).toLocaleString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" })}</small></header><p>{comment.body}</p></div>{comment.userId === session?.user.id && <button onClick={() => void deleteDocumentComment(comment)} aria-label={tr("Delete comment", "댓글 삭제")}>×</button>}</article>)}{documentComments.length === 0 && <div className="document-comments-empty"><span>◌</span><b>{tr("No comments yet", "아직 댓글이 없습니다")}</b><p>{tr("Start a discussion about this document.", "이 문서에 대한 토론을 시작하세요.")}</p></div>}</div><form onSubmit={addDocumentComment}><textarea name="comment" maxLength={1200} required placeholder={tr("Add a comment…", "댓글 추가…")} /><button className="create-button" type="submit">＋ {tr("Comment", "댓글")}</button></form></aside>}</main></div>}
+    {documentEditorOpen && editingDocument && <div className="document-image-attach"><button type="button" onClick={() => documentImageInputRef.current?.click()} disabled={documentImageUploading} aria-label={tr("Attach image", "이미지 첨부")}>{documentImageUploading ? "…" : "▧"}<span>{documentImageUploading ? tr("Uploading…", "업로드 중…") : tr("Attach image", "이미지 첨부")}</span></button><input ref={documentImageInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadDocumentImage}/></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
