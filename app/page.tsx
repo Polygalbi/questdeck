@@ -261,6 +261,8 @@ export default function Home() {
   const documentImageInputRef = useRef<HTMLInputElement | null>(null);
   const documentSaveRequest = useRef(0);
   const [documentImageUploading, setDocumentImageUploading] = useState(false);
+  const [documentExportOpen, setDocumentExportOpen] = useState(false);
+  const [documentExportBusy, setDocumentExportBusy] = useState(false);
   const [milestones, setMilestones] = useState<Milestone[]>(initialMilestones);
   const [milestoneEditorOpen, setMilestoneEditorOpen] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
@@ -1170,6 +1172,63 @@ export default function Home() {
     } finally { setDocumentImageUploading(false); }
   }
 
+  async function buildDocumentExport() {
+    const content = await hydrateDocumentImages(documentEditorRef.current?.innerHTML ?? documentDraftContent);
+    const parsed = new DOMParser().parseFromString(content, "text/html");
+    const images = Array.from(parsed.querySelectorAll<HTMLImageElement>("img"));
+    await Promise.all(images.map(async image => {
+      if (!image.src) return;
+      const response = await fetch(image.src);
+      if (!response.ok) throw new Error(tr("An image could not be included", "이미지를 내보내기에 포함하지 못했습니다"));
+      const blob = await response.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+      image.src = dataUrl;
+      image.removeAttribute("data-storage-path");
+    }));
+    const title = escapeHtml(documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"));
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><style>body{max-width:760px;margin:48px auto;padding:0 28px;color:#302b35;font:16px/1.7 Georgia,serif}h1{font-size:34px}h2{font-size:26px}h3{font-size:20px}img{display:block;max-width:100%;height:auto;margin:auto;border-radius:8px}figure{margin:24px 0;padding:10px;border:1px solid #ddd;border-radius:10px}figcaption{text-align:center;color:#777;font:12px Arial,sans-serif;padding-top:8px}table{width:100%;border-collapse:collapse}th,td{padding:10px;border:1px solid #ccc;text-align:left}blockquote{padding:12px 18px;border-left:4px solid #7657ee;background:#f6f2ff}</style></head><body><article>${parsed.body.innerHTML}</article></body></html>`;
+  }
+
+  async function exportDocument(format: "doc" | "html") {
+    setDocumentExportBusy(true);
+    setDocumentExportOpen(false);
+    try {
+      const html = await buildDocumentExport();
+      const filename = (documentDraftTitle.trim() || "Questdeck document").replace(/[\\/:*?"<>|]+/g, "-");
+      const blob = new Blob([html], { type: format === "doc" ? "application/msword;charset=utf-8" : "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${filename}.${format}`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setToast(tr("Document exported", "문서를 내보냈습니다"));
+    } catch (error) { setToast(error instanceof Error ? error.message : tr("Could not export document", "문서를 내보내지 못했습니다")); }
+    finally { setDocumentExportBusy(false); }
+  }
+
+  async function printDocument() {
+    const printWindow = window.open("", "questdeck-document-print", "width=920,height=780");
+    if (!printWindow) { setToast(tr("Allow pop-ups to print this document", "문서를 인쇄하려면 팝업을 허용하세요")); return; }
+    setDocumentExportBusy(true);
+    setDocumentExportOpen(false);
+    printWindow.document.write(`<p style="font-family:sans-serif;padding:24px">${tr("Preparing document…", "문서를 준비하는 중…")}</p>`);
+    try {
+      const html = await buildDocumentExport();
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.focus();
+      window.setTimeout(() => printWindow.print(), 250);
+    } catch (error) { printWindow.close(); setToast(error instanceof Error ? error.message : tr("Could not prepare document", "문서를 준비하지 못했습니다")); }
+    finally { setDocumentExportBusy(false); }
+  }
+
   async function addDocumentComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editingDocument || !session) return;
@@ -1607,7 +1666,7 @@ export default function Home() {
     {nameEditorOpen && session && <div className="modal-backdrop" onMouseDown={() => setNameEditorOpen(false)}><section className="modal create-modal name-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit name", "이름 수정")}><header><div><small>{tr("PROFILE", "프로필")}</small><h2>{tr("Edit your name", "이름 수정")}</h2></div><button onClick={() => setNameEditorOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveAccountName}><label>{tr("Display name", "표시 이름")}<input name="displayName" required autoFocus maxLength={80} defaultValue={accountName} placeholder={tr("Your name", "이름")}/></label><p className="form-help">{tr("This name appears in your greeting, account page, and profile menu.", "이 이름은 인사말, 계정 페이지, 프로필 메뉴에 표시됩니다.")}</p><footer><button type="button" onClick={() => setNameEditorOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save name", "이름 저장")}</button></footer></form></section></div>}
     {authOpen && <div className="modal-backdrop" onMouseDown={() => setAuthOpen(false)}><section className="modal create-modal auth-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Questdeck account", "Questdeck 계정")}><header><div><small>QUESTDECK ACCOUNT</small><h2>{authMode === "signin" ? tr("Welcome back", "다시 오신 것을 환영합니다") : tr("Create your account", "계정 만들기")}</h2></div><button onClick={() => setAuthOpen(false)} aria-label="Close">×</button></header><button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button><div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div><form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<footer className="auth-footer"><button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Create account", "계정 만들기") : tr("I already have an account", "이미 계정이 있어요")}</button><button className="create-button" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Sign up", "가입하기")}</button></footer></form></section></div>}
     {documentEditorOpen && editingDocument && <div className="document-studio" role="dialog" aria-modal="true" aria-label={tr("Document editor", "문서 편집기")}><header className="document-studio-topbar"><button className="document-back" onClick={() => void saveDocumentDraft(true)} aria-label={tr("Back to documents", "문서 목록으로 돌아가기")}>←</button><span className="brand-mark">Q</span><div><input value={documentDraftTitle} maxLength={200} onChange={event => { setDocumentDraftTitle(event.target.value); setDocumentDirty(true); setDocumentSaveState("unsaved"); }} aria-label={tr("Document title", "문서 제목")} /><small className={documentSaveState}>{documentSaveState === "saving" ? tr("Saving…", "저장 중…") : documentSaveState === "unsaved" ? tr("Unsaved changes", "저장되지 않은 변경") : `✓ ${tr("Saved to workspace", "워크스페이스에 저장됨")}`}</small></div><button className={`document-publish-state ${editingDocument.isPublished ? "published" : ""}`} onClick={() => void setDocumentPublished({ ...editingDocument, title: documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"), content: sanitizeRichText(documentDraftContent) }, !editingDocument.isPublished)}>{editingDocument.isPublished ? `● ${tr("Published", "공개됨")}` : `○ ${tr("Private", "비공개")}`}</button><button className={`document-comment-toggle ${documentCommentsOpen ? "active" : ""}`} onClick={() => setDocumentCommentsOpen(open => !open)}>◌ {documentComments.length}</button><button className="create-button document-done" onClick={() => void saveDocumentDraft(true)}>✓ {tr("Done", "완료")}</button></header><div className="document-studio-toolbar" role="toolbar" aria-label={tr("Document formatting", "문서 서식")}><select defaultValue="p" onChange={event => formatDocument("formatBlock", event.target.value)} aria-label={tr("Text style", "텍스트 스타일")}><option value="p">{tr("Normal text", "본문")}</option><option value="h1">{tr("Heading 1", "제목 1")}</option><option value="h2">{tr("Heading 2", "제목 2")}</option><option value="h3">{tr("Heading 3", "제목 3")}</option><option value="blockquote">{tr("Quote", "인용")}</option></select><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("bold")} aria-label={tr("Bold", "굵게")}><b>B</b></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("italic")} aria-label={tr("Italic", "기울임")}><i>I</i></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("underline")} aria-label={tr("Underline", "밑줄")}><u>U</u></button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertUnorderedList")} aria-label={tr("Bullet list", "글머리 기호")}>• ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertOrderedList")} aria-label={tr("Numbered list", "번호 목록")}>1. ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={addDocumentLink} aria-label={tr("Add link", "링크 추가")}>↗</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={insertDocumentTable} aria-label={tr("Insert table", "표 삽입")}>▦</button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("undo")} aria-label={tr("Undo", "실행 취소")}>↶</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("redo")} aria-label={tr("Redo", "다시 실행")}>↷</button></div><main className={`document-studio-main ${documentCommentsOpen ? "with-comments" : ""}`}><section className="document-canvas-wrap"><form className="document-canvas" onSubmit={saveDocument}><div ref={documentEditorRef} className="document-rich-editor rich-document-content" contentEditable suppressContentEditableWarning data-placeholder={tr("Start writing your document…", "문서 작성을 시작하세요…")} onInput={updateDocumentContent} dangerouslySetInnerHTML={{ __html: documentDraftContent }} /><footer><span>{richTextExcerpt(documentDraftContent).split(/\s+/).filter(Boolean).length} {tr("words", "단어")}</span><button type="submit">{tr("Save now", "지금 저장")}</button></footer></form></section>{documentCommentsOpen && <aside className="document-comments"><header><div><small>{tr("DISCUSSION", "토론")}</small><h3>{tr("Document comments", "문서 댓글")}</h3></div><button onClick={() => setDocumentCommentsOpen(false)}>×</button></header><div className="document-comment-list">{documentComments.map(comment => <article key={comment.id}><span>{comment.authorName.split(/\s+/).map(part => part[0]).join("").slice(0,2).toUpperCase()}</span><div><header><b>{comment.authorName || comment.authorEmail}</b><small>{new Date(comment.createdAt).toLocaleString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" })}</small></header><p>{comment.body}</p></div>{comment.userId === session?.user.id && <button onClick={() => void deleteDocumentComment(comment)} aria-label={tr("Delete comment", "댓글 삭제")}>×</button>}</article>)}{documentComments.length === 0 && <div className="document-comments-empty"><span>◌</span><b>{tr("No comments yet", "아직 댓글이 없습니다")}</b><p>{tr("Start a discussion about this document.", "이 문서에 대한 토론을 시작하세요.")}</p></div>}</div><form onSubmit={addDocumentComment}><textarea name="comment" maxLength={1200} required placeholder={tr("Add a comment…", "댓글 추가…")} /><button className="create-button" type="submit">＋ {tr("Comment", "댓글")}</button></form></aside>}</main></div>}
-    {documentEditorOpen && editingDocument && <div className="document-image-attach"><button type="button" onClick={() => documentImageInputRef.current?.click()} disabled={documentImageUploading} aria-label={tr("Attach image", "이미지 첨부")}>{documentImageUploading ? "…" : "▧"}<span>{documentImageUploading ? tr("Uploading…", "업로드 중…") : tr("Attach image", "이미지 첨부")}</span></button><input ref={documentImageInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadDocumentImage}/></div>}
+    {documentEditorOpen && editingDocument && <div className="document-image-attach"><button type="button" onClick={() => documentImageInputRef.current?.click()} disabled={documentImageUploading || documentExportBusy} aria-label={tr("Attach image", "이미지 첨부")}>{documentImageUploading ? "…" : "▧"}<span>{documentImageUploading ? tr("Uploading…", "업로드 중…") : tr("Attach image", "이미지 첨부")}</span></button><div className="document-export-control"><button type="button" onClick={() => setDocumentExportOpen(open => !open)} disabled={documentExportBusy} aria-expanded={documentExportOpen} aria-label={tr("Export document", "문서 내보내기")}>{documentExportBusy ? "…" : "⇩"}<span>{documentExportBusy ? tr("Preparing…", "준비 중…") : tr("Export", "내보내기")}</span></button>{documentExportOpen && <div className="document-export-menu"><button type="button" onClick={() => void exportDocument("doc")}><b>W</b><span>{tr("Word document", "Word 문서")}<small>.doc</small></span></button><button type="button" onClick={() => void exportDocument("html")}><b>⌘</b><span>{tr("Web document", "웹 문서")}<small>.html</small></span></button><button type="button" onClick={() => void printDocument()}><b>▤</b><span>{tr("Print or save PDF", "인쇄 또는 PDF 저장")}<small>{tr("Uses your print dialog", "인쇄 창 사용")}</small></span></button></div>}</div><input ref={documentImageInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadDocumentImage}/></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
