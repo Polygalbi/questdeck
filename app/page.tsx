@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
@@ -117,13 +117,31 @@ const initialSubTodos: Record<number, SubTodo[]> = {
   3: [{ id: 301, text: "Choose final silhouette", done: true }, { id: 302, text: "Review arena lighting", done: false }],
 };
 
-const timelineDays = ["Mon 17", "Tue 18", "Wed 19", "Thu 20", "Fri 21", "Sat 22", "Sun 23", "Mon 24", "Tue 25", "Wed 26", "Thu 27", "Fri 28", "Sat 29", "Sun 30"];
-const timelineLanes = [
-  { team: "DESIGN", owner: "MK", tone: "violet", bars: [{ title: "Movement tuning", start: 1, span: 3, progress: 74 }, { title: "Boss encounter", start: 5, span: 4, progress: 38 }, { title: "Difficulty pass", start: 10, span: 3, progress: 0 }] },
-  { team: "ART", owner: "AS", tone: "coral", bars: [{ title: "Forest props", start: 0, span: 4, progress: 100 }, { title: "Arena concepts", start: 4, span: 5, progress: 62 }, { title: "Demo polish", start: 10, span: 4, progress: 0 }] },
-  { team: "CODE", owner: "NK", tone: "blue-card", bars: [{ title: "Input remapping", start: 2, span: 4, progress: 55 }, { title: "Save system QA", start: 7, span: 3, progress: 15 }, { title: "Build candidate", start: 11, span: 3, progress: 0 }] },
-  { team: "AUDIO", owner: "JL", tone: "mint", bars: [{ title: "Forest ambience", start: 1, span: 5, progress: 81 }, { title: "Boss mix", start: 8, span: 4, progress: 20 }] },
-];
+const timelineReferenceDate = new Date(2026, 7, 18);
+const dayMs = 86_400_000;
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function cardDueDate(label: string) {
+  if (label === "Today") return timelineReferenceDate;
+  if (label === "Tomorrow") return addDays(timelineReferenceDate, 1);
+  const match = label.match(/^([A-Za-z]{3})\s+(\d{1,2})$/);
+  if (!match) return null;
+  const parsed = new Date(`${match[1]} ${match[2]}, 2026`);
+  return Number.isNaN(parsed.getTime()) ? null : startOfDay(parsed);
+}
+
+function timelineDateLabel(date: Date) {
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 function QuestCard({ card, onOpen, compact = false, todoSummary }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number } }) {
   return <button className={`quest-card ${compact ? "compact" : ""}`} onClick={() => onOpen(card)} aria-label={`Open ${card.title}`}>
@@ -175,6 +193,10 @@ export default function Home() {
   const [language, setLanguage] = useState<"en" | "ko">("en");
   const [subTodos, setSubTodos] = useState<Record<number, SubTodo[]>>(initialSubTodos);
   const [editCardOpen, setEditCardOpen] = useState(false);
+  const [timelineStart, setTimelineStart] = useState(() => new Date(2026, 7, 17));
+  const [timelineScale, setTimelineScale] = useState<"2 weeks" | "Month" | "Quarter">("2 weeks");
+  const [timelineSort, setTimelineSort] = useState<"Due date" | "Status" | "Owner" | "Name">("Due date");
+  const [draggedTimelineCard, setDraggedTimelineCard] = useState<number | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
@@ -732,6 +754,46 @@ export default function Home() {
   const statusLabel = (status: Status | Project["status"]) => ({ Ready: tr("Ready", "준비"), "In progress": tr("In progress", "진행 중"), Review: tr("Review", "검토"), Done: tr("Done", "완료"), Active: tr("Active", "활성"), "On hold": tr("On hold", "보류"), Archived: tr("Archived", "보관됨") }[status]);
   const selectedTodos = selected ? (subTodos[selected.id] ?? []) : [];
   const completedSubTodos = selectedTodos.filter(todo => todo.done).length;
+  const timelineDayCount = timelineScale === "2 weeks" ? 14 : timelineScale === "Month" ? 28 : 84;
+  const timelineDates = useMemo(() => Array.from({ length: timelineDayCount }, (_, index) => addDays(timelineStart, index)), [timelineDayCount, timelineStart]);
+  const timelineEnd = timelineDates[timelineDates.length - 1];
+  const timelineMonthLabel = timelineStart.getMonth() === timelineEnd.getMonth()
+    ? timelineStart.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { month: "long", year: "numeric" })
+    : `${timelineStart.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { month: "short" })} – ${timelineEnd.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { month: "short", year: "numeric" })}`;
+  const timelineCards = useMemo(() => {
+    const activeNames = new Set(activeProjects.map(item => item.name));
+    const statusOrder: Record<Status, number> = { Ready: 0, "In progress": 1, Review: 2, Done: 3 };
+    return cards
+      .filter(card => activeNames.has(card.project) && (project === "All projects" || card.project === project))
+      .map(card => ({ card, date: cardDueDate(card.due) }))
+      .filter((item): item is { card: Card; date: Date } => Boolean(item.date))
+      .filter(item => item.date >= timelineStart && item.date <= timelineEnd)
+      .sort((a, b) => {
+        if (timelineSort === "Status") return statusOrder[a.card.status] - statusOrder[b.card.status] || a.date.getTime() - b.date.getTime();
+        if (timelineSort === "Owner") return a.card.owner.localeCompare(b.card.owner) || a.date.getTime() - b.date.getTime();
+        if (timelineSort === "Name") return a.card.title.localeCompare(b.card.title);
+        return a.date.getTime() - b.date.getTime() || a.card.title.localeCompare(b.card.title);
+      });
+  }, [activeProjects, cards, project, timelineEnd, timelineSort, timelineStart]);
+
+  async function moveTimelineCard(cardId: number, date: Date) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const previous = cards.find(card => card.id === cardId);
+    if (!previous) return;
+    const updated = { ...previous, due: timelineDateLabel(date) };
+    setCards(current => current.map(card => card.id === cardId ? updated : card));
+    setSelected(current => current?.id === cardId ? updated : current);
+    setDraggedTimelineCard(null);
+    try {
+      await syncQuestdeck("update_card", { card: updated }, accessToken);
+      setToast(tr(`${updated.title} moved to ${updated.due}`, `${updated.title} 카드를 ${updated.due}(으)로 이동했습니다`));
+    } catch (error) {
+      setCards(current => current.map(card => card.id === cardId ? previous : card));
+      setSelected(current => current?.id === cardId ? previous : current);
+      setToast(error instanceof Error ? error.message : tr("Could not move card", "카드를 이동하지 못했습니다"));
+    }
+  }
 
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
@@ -796,19 +858,19 @@ export default function Home() {
       </div>}
 
       {view === "timeline" && <div className="content schedule-content">
-        <div className="page-title timeline-title"><div><p>{tr("PRODUCTION SCHEDULE", "프로덕션 일정")}</p><h1>{tr("Timeline", "타임라인")}</h1><h2>{tr("See every team’s card runs, handoffs, and deadlines in one place.", "모든 팀의 카드 진행, 인계, 마감일을 한곳에서 확인하세요.")}</h2></div><div className="timeline-controls"><button>‹</button><button className="today-button">{tr("Today", "오늘")}</button><button>›</button><select aria-label="Timeline scale"><option>{tr("2 weeks", "2주")}</option><option>{tr("Month", "월")}</option><option>{tr("Quarter", "분기")}</option></select></div></div>
+        <div className="page-title timeline-title"><div><p>{tr("PRODUCTION SCHEDULE", "프로덕션 일정")}</p><h1>{tr("Timeline", "타임라인")}</h1><h2>{tr("Plan the same cards shown on your Production Board.", "프로덕션 보드의 동일한 카드를 일정으로 계획하세요.")}</h2></div><div className="timeline-controls"><button onClick={() => setTimelineStart(current => addDays(current, -timelineDayCount))} aria-label={tr("Previous period", "이전 기간")}>‹</button><button className="today-button" onClick={() => setTimelineStart(new Date(2026, 7, 17))}>{tr("Today", "오늘")}</button><button onClick={() => setTimelineStart(current => addDays(current, timelineDayCount))} aria-label={tr("Next period", "다음 기간")}>›</button><select value={timelineScale} onChange={event => setTimelineScale(event.target.value as typeof timelineScale)} aria-label={tr("Timeline scale", "타임라인 범위")}><option value="2 weeks">{tr("2 weeks", "2주")}</option><option value="Month">{tr("Month", "월")}</option><option value="Quarter">{tr("Quarter", "분기")}</option></select></div></div>
+        <div className="timeline-toolbar"><label>{tr("Project", "프로젝트")}<select value={project} onChange={event => setProject(event.target.value)}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{activeProjects.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label><label>{tr("Sort", "정렬")}<select value={timelineSort} onChange={event => setTimelineSort(event.target.value as typeof timelineSort)}><option value="Due date">{tr("Due date", "마감일")}</option><option value="Status">{tr("Status", "상태")}</option><option value="Owner">{tr("Owner", "담당자")}</option><option value="Name">{tr("Name", "이름")}</option></select></label><span><b>{timelineCards.length}</b> {tr("scheduled cards", "개 일정 카드")}</span>{project !== "All projects" && <button onClick={() => setProject("All projects")}>× {tr("Clear project", "프로젝트 필터 해제")}</button>}</div>
         <section className="schedule-shell">
-          <header className="schedule-month"><div className="lane-corner"><span>TEAMS</span><b>August 2026</b></div><div className="month-band"><span>Week 34</span><i>Festival demo · Aug 30</i></div></header>
+          <header className="schedule-month"><div className="lane-corner"><span>{tr("BOARD CARDS", "보드 카드")}</span><b>{timelineMonthLabel}</b></div><div className="month-band"><span>{project === "All projects" ? tr("All active projects", "모든 활성 프로젝트") : project}</span><i>{tr("Drag cards to reschedule", "카드를 끌어 날짜 변경")}</i></div></header>
           <div className="schedule-scroll">
-            <div className="date-grid"><div className="date-label-spacer"/>{timelineDays.map((day, index) => { const [weekday, date] = day.split(" "); return <div className={`date-cell ${index === 1 ? "today" : ""} ${index === 5 || index === 6 || index === 12 || index === 13 ? "weekend" : ""}`} key={day}><small>{weekday}</small><b>{date}</b></div>})}</div>
+            <div className="date-grid" style={{gridTemplateColumns:`210px repeat(${timelineDayCount},minmax(58px,1fr))`}}><div className="date-label-spacer"/>{timelineDates.map(date => { const today = date.getTime() === timelineReferenceDate.getTime(); const weekend = date.getDay() === 0 || date.getDay() === 6; return <div className={`date-cell ${today ? "today" : ""} ${weekend ? "weekend" : ""}`} key={date.toISOString()}><small>{date.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { weekday: "short" })}</small><b>{date.getDate()}</b></div>})}</div>
             <div className="schedule-body">
-              <div className="today-line" aria-hidden="true"><span>Today</span></div>
-              <div className="deadline-marker deadline-one" title="Playtest checkpoint"><span>◆</span><small>Playtest</small></div>
-              <div className="deadline-marker deadline-two" title="Content lock"><span>◆</span><small>Content lock</small></div>
-              {timelineLanes.map((lane, laneIndex) => <div className="schedule-row" key={lane.team}><div className="lane-label"><span className={`lane-swatch ${lane.tone}`}/><div><b>{lane.team}</b><small>{lane.owner} · {lane.bars.length} runs</small></div></div><div className="lane-track">{lane.bars.map((bar, barIndex) => <button className={`run-bar ${lane.tone}`} style={{gridColumn:`${bar.start + 1} / span ${bar.span}`}} key={bar.title} onClick={() => setSelected(cards[(laneIndex * 2 + barIndex) % cards.length])} aria-label={`Open ${bar.title}`}><span>{bar.title}</span><small>{bar.span}d</small>{bar.progress > 0 && <i style={{width:`${bar.progress}%`}}/>}</button>)}</div></div>)}
+              {timelineReferenceDate >= timelineStart && timelineReferenceDate <= timelineEnd && <div className="today-line" style={{left:`calc(210px + ((100% - 210px) / ${timelineDayCount} * ${Math.floor((timelineReferenceDate.getTime() - timelineStart.getTime()) / dayMs) + .5}))`}} aria-hidden="true"><span>{tr("Today", "오늘")}</span></div>}
+              {timelineCards.map(({card,date}) => { const start = Math.floor((date.getTime() - timelineStart.getTime()) / dayMs); const span = Math.min(timelineDayCount - start, Math.max(1, Math.ceil(card.points / 2))); const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; return <div className="schedule-row" key={card.id}><div className="lane-label"><span className={`lane-swatch ${card.color}`}/><div><b>{card.title}</b><small>{card.tag} · {card.owner} · {statusLabel(card.status)}</small></div></div><div className="lane-track" style={{gridTemplateColumns:`repeat(${timelineDayCount},minmax(58px,1fr))`, "--timeline-columns":timelineDayCount} as CSSProperties}>{timelineDates.map((dropDate,index) => <div className={`timeline-drop-zone ${draggedTimelineCard ? "drag-active" : ""}`} style={{gridColumn:index + 1}} key={dropDate.toISOString()} onDragOver={event => event.preventDefault()} onDrop={(event: DragEvent<HTMLDivElement>) => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-card") || draggedTimelineCard); if (cardId) void moveTimelineCard(cardId, dropDate); }} />)}<button draggable onDragStart={(event: DragEvent<HTMLButtonElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-card", String(card.id)); setDraggedTimelineCard(card.id); }} onDragEnd={() => setDraggedTimelineCard(null)} className={`run-bar ${card.color} ${draggedTimelineCard === card.id ? "dragging" : ""}`} style={{gridColumn:`${start + 1} / span ${span}`}} onClick={() => setSelected(card)} aria-label={tr(`Open ${card.title}; drag to reschedule`, `${card.title} 열기; 끌어서 일정 변경`)}><span>{card.title}</span>{todos.length > 0 && <small className="run-subtasks">☑ {completed}/{todos.length}</small>}<small>{card.due}</small><i style={{width:`${card.status === "Done" ? 100 : todos.length ? Math.round(completed / todos.length * 100) : 0}%`}}/><span className="timeline-card-tooltip" role="tooltip"><b>{card.title}</b><em>{card.description}</em><span><strong>{card.project}</strong><strong>{statusLabel(card.status)}</strong></span><span><strong>◉ {card.owner}</strong><strong>◷ {card.due}</strong><strong>◆ {card.points}</strong></span>{todos.length > 0 && <span><strong>{tr("Sub-tasks", "하위 작업")} {completed}/{todos.length}</strong><strong>{todos.slice(0,2).map(todo => `${todo.done ? "✓" : "○"} ${todo.text}`).join(" · ")}</strong></span>}</span></button></div></div>})}
+              {timelineCards.length === 0 && <div className="timeline-empty"><span>◇</span><div><b>{tr("No scheduled cards in this period", "이 기간에 예정된 카드가 없습니다")}</b><small>{tr("Choose another project or move to a different date range.", "다른 프로젝트를 선택하거나 날짜 범위를 이동하세요.")}</small></div></div>}
             </div>
           </div>
-          <footer className="timeline-legend"><span><i className="legend-dot active-dot"/> Active run</span><span><i className="legend-dot planned-dot"/> Planned</span><span><b>◆</b> Milestone</span><p>Drag the schedule horizontally on smaller screens</p></footer>
+          <footer className="timeline-legend"><span><i className="legend-dot active-dot"/> {tr("Board card", "보드 카드")}</span><span>☑ {tr("Sub-task progress", "하위 작업 진행률")}</span><span>◷ {tr("Due date", "마감일")}</span><p>{tr("Drag a card onto another day to reschedule it", "카드를 다른 날짜로 끌어 일정을 변경하세요")}</p></footer>
         </section>
       </div>}
 
