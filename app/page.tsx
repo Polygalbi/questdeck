@@ -22,6 +22,8 @@ type DocumentComment = { id: number; documentId: number; userId: string; authorE
 type Milestone = { id: number; title: string; milestoneDate: string; progress: number; completedCards: number; totalCards: number; note: string; color: "violet" | "mint" | "coral"; stage: string };
 type BoardSort = "Default" | "Priority" | "Priority low" | "Due date" | "Due date latest" | "Effort" | "Effort low" | "Title" | "Newest";
 type BoardBackup = { version: 1; product: "Questdeck"; createdAt: string; cards: Card[]; subTodos: Record<number, SubTodo[]>; columnNames: Partial<Record<Status, string>> };
+type WorkspaceBackupAttachment = { path: string; mimeType: string; dataUrl: string };
+type WorkspaceBackup = { version: 2; product: "Questdeck"; kind: "full-workspace"; createdAt: string; workspace: { cards: Card[]; subTodos: Record<number, SubTodo[]>; projects: Project[]; milestones: Milestone[]; productionDisciplines: ProductionDiscipline[]; members: Member[]; roleDefinitions: RoleDefinition[]; workspaces: Workspace[]; activeWorkspaceId: string; settings: { studioName: string; weeklyDigest: boolean; defaultProjectId: string; language: "en" | "ko" }; documents: WorkspaceDocument[]; documentComments: DocumentComment[]; notifications: Notification[]; columnNames: Partial<Record<Status, string>> }; attachments: WorkspaceBackupAttachment[] };
 type CardHoverPreview = { card: Card; left: number; top: number; completed: number; total: number };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
@@ -584,16 +586,54 @@ export default function Home() {
     void syncQuestdeck("create_card", { card: newCard }, accessToken).catch(() => setToast(tr("Card saved locally; Supabase sync failed", "카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
   }
 
-  function downloadBoardBackup() {
-    const backup: BoardBackup = { version: 1, product: "Questdeck", createdAt: new Date().toISOString(), cards, subTodos, columnNames };
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `questdeck-board-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setToast(tr("Board backup downloaded", "보드 백업을 다운로드했습니다"));
+  async function downloadWorkspaceBackup() {
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    setBackupBusy(true);
+    try {
+      const { data: commentRows, error: commentError } = await supabase.from("questdeck_document_comments").select("id,document_id,user_id,author_email,author_name,body,created_at").order("created_at", { ascending: true });
+      if (commentError) throw commentError;
+      const allDocumentComments: DocumentComment[] = (commentRows ?? []).map(row => ({ id: row.id, documentId: row.document_id, userId: row.user_id, authorEmail: row.author_email, authorName: row.author_name, body: row.body, createdAt: row.created_at }));
+      const imagePaths = Array.from(new Set(documents.flatMap(document => Array.from(document.content.matchAll(/data-storage-path=["']([^"']+)["']/g)).map(match => match[1]).filter(path => documentImagePathPattern.test(path)))));
+      const attachments: WorkspaceBackupAttachment[] = [];
+      if (imagePaths.length) {
+        const { data: signedImages, error: signedError } = await supabase.storage.from(DOCUMENT_IMAGE_BUCKET).createSignedUrls(imagePaths, 3600);
+        if (signedError) throw signedError;
+        await Promise.all((signedImages ?? []).map(async item => {
+          if (!item.signedUrl) return;
+          const response = await fetch(item.signedUrl);
+          if (!response.ok) throw new Error(tr("An attached image could not be backed up", "첨부 이미지 중 하나를 백업하지 못했습니다"));
+          const blob = await response.blob();
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+          });
+          attachments.push({ path: item.path, mimeType: blob.type || "application/octet-stream", dataUrl });
+        }));
+      }
+      const backup: WorkspaceBackup = {
+        version: 2,
+        product: "Questdeck",
+        kind: "full-workspace",
+        createdAt: new Date().toISOString(),
+        workspace: { cards, subTodos, projects, milestones, productionDisciplines, members, roleDefinitions, workspaces, activeWorkspaceId, settings: { studioName, weeklyDigest, defaultProjectId, language }, documents, documentComments: allDocumentComments, notifications, columnNames },
+        attachments,
+      };
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `questdeck-full-workspace-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setToast(tr(`Full backup downloaded · ${attachments.length} images included`, `전체 백업을 다운로드했습니다 · 이미지 ${attachments.length}개 포함`));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not create the full backup", "전체 백업을 만들지 못했습니다"));
+    } finally {
+      setBackupBusy(false);
+    }
   }
 
   async function restoreBoardBackup(event: ChangeEvent<HTMLInputElement>) {
@@ -1776,7 +1816,7 @@ export default function Home() {
     {editProject && <div className="modal-backdrop" onMouseDown={() => setEditProject(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit project", "프로젝트 수정")}><header><div><small>{tr("PROJECT SETTINGS", "프로젝트 설정")}</small><h2>{tr("Edit project", "프로젝트 수정")}</h2></div><button onClick={() => setEditProject(null)} aria-label="Close">×</button></header><form onSubmit={saveProjectEdits}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus defaultValue={editProject.name} /></label><div className="form-row"><label>{tr("Project lead", "프로젝트 리드")}<select name="owner" defaultValue={editProject.owner}>{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editProject.status}><option>Active</option><option>On hold</option><option>Archived</option></select></label></div><div className="form-row"><label>{tr("Progress", "진행률")}<input name="progress" type="number" min="0" max="100" defaultValue={editProject.progress} /></label><label>{tr("Color", "색상")}<select name="color" defaultValue={editProject.color}><option value="purple">Purple</option><option value="yellow">Yellow</option><option value="blue">Blue</option></select></label></div><footer><button type="button" onClick={() => setEditProject(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save project", "프로젝트 저장")}</button></footer></form></section></div>}
 
     {archiveOpen && <div className="modal-backdrop" onMouseDown={() => setArchiveOpen(false)}><section className="modal create-modal archive-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Archived cards", "보관된 카드")}><header><div><small>{tr("RECOVERABLE FOLDER", "복원 가능한 보관함")}</small><h2>{tr("Archived cards", "보관된 카드")} <span>{archivedCards.length}</span></h2></div><button onClick={() => setArchiveOpen(false)} aria-label="Close">×</button></header><p className="archive-help">{tr("Archived cards stay out of the board, timeline, totals, and milestones until you restore them.", "보관된 카드는 복원할 때까지 보드, 타임라인, 집계 및 마일스톤에서 제외됩니다.")}</p><div className="archive-card-list">{archivedCards.map(card => <article key={card.id}><i className={card.color}/><div><small>{card.project} · {statusLabel(card.status)}</small><b>{card.title}</b><span>{card.tag} · {tr("Due", "마감")} {card.due}</span></div><button className="archive-restore-button" onClick={() => void setCardArchived(card, false)}>↺ {tr("Restore", "복원")}</button><button className="archive-delete-button" onClick={() => void deleteCard(card)} aria-label={tr(`Delete ${card.title}`, `${card.title} 삭제`)}>×</button></article>)}{archivedCards.length === 0 && <div className="archive-empty"><span>▣</span><b>{tr("Your archive is empty", "보관함이 비어 있습니다")}</b><p>{tr("Drag a board card to Archive and it will appear here.", "보드 카드를 보관 영역으로 끌면 여기에 표시됩니다.")}</p></div>}</div></section></div>}
-    {backupOpen && <div className="modal-backdrop" onMouseDown={() => setBackupOpen(false)}><section className="modal create-modal backup-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Board backup", "보드 백업")}><header><div><small>{tr("BOARD SAFETY", "보드 안전 관리")}</small><h2>{tr("Backup & restore", "백업 및 복원")}</h2></div><button onClick={() => setBackupOpen(false)} aria-label="Close">×</button></header><p>{tr("Keep a portable copy of every active and archived card, its sub-tasks, and your column names.", "활성 및 보관 카드, 하위 작업, 열 이름을 휴대 가능한 파일로 보관하세요.")}</p><div className="backup-options"><article><span>⇩</span><div><b>{tr("Download a backup", "백업 다운로드")}</b><small>{tr(`${cards.length} cards · saved as a JSON file`, `${cards.length}개 카드 · JSON 파일로 저장`)}</small></div><button className="create-button" onClick={downloadBoardBackup}>{tr("Download", "다운로드")}</button></article><article><span>↺</span><div><b>{tr("Restore from a backup", "백업에서 복원")}</b><small>{tr("Merges cards by ID and keeps cards created since the backup.", "카드 ID로 병합하며 백업 이후 만든 카드도 유지합니다.")}</small></div><button className="secondary-button" disabled={backupBusy} onClick={() => backupInputRef.current?.click()}>{backupBusy ? tr("Restoring…", "복원 중…") : tr("Choose file", "파일 선택")}</button><input ref={backupInputRef} type="file" accept="application/json,.json" onChange={event => void restoreBoardBackup(event)} /></article></div><footer><small>✓ {tr("Restore never deletes newer cards", "복원 시 새 카드를 삭제하지 않습니다")}</small><button onClick={() => setBackupOpen(false)}>{tr("Done", "완료")}</button></footer></section></div>}
+    {backupOpen && <div className="modal-backdrop" onMouseDown={() => setBackupOpen(false)}><section className="modal create-modal backup-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Workspace backup", "워크스페이스 백업")}><header><div><small>{tr("WORKSPACE SAFETY", "워크스페이스 안전 관리")}</small><h2>{tr("Full backup & restore", "전체 백업 및 복원")}</h2></div><button onClick={() => setBackupOpen(false)} aria-label="Close">×</button></header><p>{tr("Download one private, portable copy of all Questdeck workspace data. Attached document images are embedded in the file too.", "Questdeck 워크스페이스의 모든 데이터를 하나의 비공개 휴대용 파일로 다운로드하세요. 문서 첨부 이미지도 파일에 포함됩니다.")}</p><div className="backup-coverage"><span>{tr("Cards & subtasks", "카드 및 하위 작업")}</span><span>{tr("Projects & milestones", "프로젝트 및 마일스톤")}</span><span>{tr("Members & roles", "멤버 및 역할")}</span><span>{tr("Documents & images", "문서 및 이미지")}</span><span>{tr("Workspace settings", "워크스페이스 설정")}</span></div><div className="backup-options"><article><span>⇩</span><div><b>{tr("Download all workspace data", "모든 워크스페이스 데이터 다운로드")}</b><small>{tr(`${cards.length} cards · ${projects.length} projects · ${documents.length} documents`, `카드 ${cards.length}개 · 프로젝트 ${projects.length}개 · 문서 ${documents.length}개`)}</small></div><button className="create-button" disabled={backupBusy} onClick={() => void downloadWorkspaceBackup()}>{backupBusy ? tr("Preparing…", "준비 중…") : tr("Download all", "전체 다운로드")}</button></article><article><span>↺</span><div><b>{tr("Restore a board backup", "보드 백업 복원")}</b><small>{tr("Imports cards and subtasks from existing Questdeck board backups without deleting newer cards.", "기존 Questdeck 보드 백업에서 카드와 하위 작업을 가져오며 새 카드는 삭제하지 않습니다.")}</small></div><button className="secondary-button" disabled={backupBusy} onClick={() => backupInputRef.current?.click()}>{backupBusy ? tr("Working…", "작업 중…") : tr("Choose file", "파일 선택")}</button><input ref={backupInputRef} type="file" accept="application/json,.json" onChange={event => void restoreBoardBackup(event)} /></article></div><footer><small>✓ {tr("No passwords or sign-in tokens are included", "비밀번호나 로그인 토큰은 포함되지 않습니다")}</small><button onClick={() => setBackupOpen(false)}>{tr("Done", "완료")}</button></footer></section></div>}
 
     {milestoneEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}><section className="modal create-modal milestone-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("Create milestone", "마일스톤 만들기")}><header><div><small>{tr("ROADMAP TARGET", "로드맵 목표")}</small><h2>{editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("New milestone", "새 마일스톤")}</h2></div><button onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }} aria-label="Close">×</button></header><form onSubmit={saveMilestone}><label>{tr("Milestone title", "마일스톤 제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingMilestone?.title ?? ""} placeholder={tr("What are you shipping?", "어떤 목표를 출시하나요?")} /></label><div className="form-row"><label>{tr("Target date", "목표 날짜")}<input name="milestoneDate" type="date" required value={milestoneDraftDate} onChange={event => setMilestoneDraftDate(event.target.value)} /></label><label>{tr("Stage", "단계")}<select name="stage" defaultValue={editingMilestone?.stage ?? "UP NEXT"}><option>UP NEXT</option><option>PRODUCTION</option><option>REVIEW</option><option>RELEASE</option><option>COMPLETE</option></select></label></div><label>{tr("Description", "설명")}<textarea name="note" maxLength={1000} defaultValue={editingMilestone?.note ?? ""} placeholder={tr("Define the delivery target and success criteria…", "출시 목표와 성공 조건을 입력하세요…")} /></label><section className="milestone-auto-panel" aria-live="polite"><header><span>✦</span><div><b>{tr("Automatic progress", "자동 진행률")}</b><small>{tr("Active-project cards due by this target date", "이 목표일까지 마감되는 활성 프로젝트 카드")}</small></div></header><div><article><small>{tr("PROGRESS", "진행률")}</small><b>{milestoneDraftStats.progress}%</b></article><article><small>{tr("COMPLETED", "완료")}</small><b>{milestoneDraftStats.completedCards}</b></article><article><small>{tr("TOTAL CARDS", "전체 카드")}</small><b>{milestoneDraftStats.totalCards}</b></article></div><p>{milestoneDraftStats.unscheduledCards > 0 ? tr(`${milestoneDraftStats.unscheduledCards} cards without a due date are not included.`, `마감일이 없는 카드 ${milestoneDraftStats.unscheduledCards}개는 포함되지 않습니다.`) : tr("Every active card has a due date and is eligible for tracking.", "모든 활성 카드에 마감일이 있어 자동 추적할 수 있습니다.")}</p></section><label>{tr("Color", "색상")}<select name="color" defaultValue={editingMilestone?.color ?? "violet"}><option value="violet">{tr("Violet", "보라")}</option><option value="mint">{tr("Mint", "민트")}</option><option value="coral">{tr("Coral", "코랄")}</option></select></label><footer className="milestone-editor-footer">{editingMilestone ? <button className="danger-button" type="button" onClick={() => void deleteMilestone(editingMilestone)}>{tr("Delete milestone", "마일스톤 삭제")}</button> : <span />}<div><button type="button" onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{editingMilestone ? tr("Save changes", "변경 저장") : tr("Create milestone", "마일스톤 만들기")}</button></div></footer></form></section></div>}
 

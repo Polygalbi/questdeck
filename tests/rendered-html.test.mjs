@@ -31,7 +31,7 @@ test("includes the high-volume board and backup controls", async () => {
   assert.match(page, /ownerFilter/);
   assert.match(page, /disciplineFilter/);
   assert.match(page, /dueFilter/);
-  assert.match(page, /downloadBoardBackup/);
+  assert.match(page, /downloadWorkspaceBackup/);
   assert.match(page, /restoreBoardBackup/);
   assert.match(css, /board-density-compact/);
   assert.match(css, /\.column-cards\{[^}]*overflow-y:auto/);
