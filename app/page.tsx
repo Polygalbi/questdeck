@@ -205,6 +205,7 @@ export default function Home() {
   const [milestones, setMilestones] = useState<Milestone[]>(initialMilestones);
   const [milestoneEditorOpen, setMilestoneEditorOpen] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
+  const [milestoneDraftDate, setMilestoneDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [publicDocument, setPublicDocument] = useState<WorkspaceDocument | null>(null);
   const [publicDocumentLoading, setPublicDocumentLoading] = useState(false);
   const [productionDisciplines, setProductionDisciplines] = useState(initialProductionDisciplines);
@@ -1011,7 +1012,22 @@ export default function Home() {
   function openMilestoneEditor(milestone: Milestone | null = null) {
     if (!session) { setAuthOpen(true); return; }
     setEditingMilestone(milestone);
+    setMilestoneDraftDate(milestone?.milestoneDate ?? new Date().toISOString().slice(0, 10));
     setMilestoneEditorOpen(true);
+  }
+
+  function calculateMilestoneStats(targetDate: string) {
+    const activeNames = new Set(projects.filter(item => item.status !== "Archived").map(item => item.name));
+    const active = cards.filter(card => activeNames.has(card.project));
+    const tracked = targetDate ? active.filter(card => Boolean(card.dueDate) && card.dueDate! <= targetDate) : [];
+    const completedCards = tracked.filter(card => card.status === "Done").length;
+    const totalCards = tracked.length;
+    return {
+      progress: totalCards ? Math.round((completedCards / totalCards) * 100) : 0,
+      completedCards,
+      totalCards,
+      unscheduledCards: active.filter(card => !card.dueDate).length,
+    };
   }
 
   async function saveMilestone(event: FormEvent<HTMLFormElement>) {
@@ -1019,15 +1035,15 @@ export default function Home() {
     const accessToken = requireSession();
     if (!accessToken) return;
     const data = new FormData(event.currentTarget);
-    const totalCards = Math.max(0, Number(data.get("totalCards")) || 0);
-    const completedCards = Math.max(0, Math.min(totalCards, Number(data.get("completedCards")) || 0));
+    const milestoneDate = String(data.get("milestoneDate"));
+    const automaticStats = calculateMilestoneStats(milestoneDate);
     const milestone = {
       ...(editingMilestone ? { id: editingMilestone.id } : {}),
       title: String(data.get("title")).trim(),
-      milestoneDate: String(data.get("milestoneDate")),
-      progress: Math.max(0, Math.min(100, Number(data.get("progress")) || 0)),
-      completedCards,
-      totalCards,
+      milestoneDate,
+      progress: automaticStats.progress,
+      completedCards: automaticStats.completedCards,
+      totalCards: automaticStats.totalCards,
       note: String(data.get("note")).trim(),
       color: String(data.get("color")) as Milestone["color"],
       stage: String(data.get("stage")).trim().toUpperCase(),
@@ -1071,7 +1087,8 @@ export default function Home() {
   const activeOpenCards = activeCards.filter(card => card.status !== "Done");
   const activeOverdueCards = activeOpenCards.filter(card => card.dueDate && new Date(`${card.dueDate}T23:59:59`) < new Date());
   const activeAttentionCards = activeOpenCards.filter(card => card.priority >= 8 || activeOverdueCards.some(overdue => overdue.id === card.id));
-  const sortedMilestones = [...milestones].sort((a, b) => a.milestoneDate.localeCompare(b.milestoneDate));
+  const sortedMilestones = milestones.map(item => ({ ...item, ...calculateMilestoneStats(item.milestoneDate) })).sort((a, b) => a.milestoneDate.localeCompare(b.milestoneDate));
+  const milestoneDraftStats = calculateMilestoneStats(milestoneDraftDate);
   const milestoneToday = startOfDay(new Date());
   const nextMilestone = sortedMilestones.find(item => new Date(`${item.milestoneDate}T12:00:00`) >= milestoneToday && item.progress < 100) ?? sortedMilestones.find(item => item.progress < 100) ?? sortedMilestones[0];
   const overdueMilestones = sortedMilestones.filter(item => item.progress < 100 && new Date(`${item.milestoneDate}T23:59:59`) < milestoneToday);
@@ -1348,7 +1365,7 @@ export default function Home() {
 
     {editProject && <div className="modal-backdrop" onMouseDown={() => setEditProject(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit project", "프로젝트 수정")}><header><div><small>{tr("PROJECT SETTINGS", "프로젝트 설정")}</small><h2>{tr("Edit project", "프로젝트 수정")}</h2></div><button onClick={() => setEditProject(null)} aria-label="Close">×</button></header><form onSubmit={saveProjectEdits}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus defaultValue={editProject.name} /></label><div className="form-row"><label>{tr("Project lead", "프로젝트 리드")}<select name="owner" defaultValue={editProject.owner}>{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editProject.status}><option>Active</option><option>On hold</option><option>Archived</option></select></label></div><div className="form-row"><label>{tr("Progress", "진행률")}<input name="progress" type="number" min="0" max="100" defaultValue={editProject.progress} /></label><label>{tr("Color", "색상")}<select name="color" defaultValue={editProject.color}><option value="purple">Purple</option><option value="yellow">Yellow</option><option value="blue">Blue</option></select></label></div><footer><button type="button" onClick={() => setEditProject(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save project", "프로젝트 저장")}</button></footer></form></section></div>}
 
-    {milestoneEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}><section className="modal create-modal milestone-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("Create milestone", "마일스톤 만들기")}><header><div><small>{tr("ROADMAP TARGET", "로드맵 목표")}</small><h2>{editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("New milestone", "새 마일스톤")}</h2></div><button onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }} aria-label="Close">×</button></header><form onSubmit={saveMilestone}><label>{tr("Milestone title", "마일스톤 제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingMilestone?.title ?? ""} placeholder={tr("What are you shipping?", "어떤 목표를 출시하나요?")} /></label><div className="form-row"><label>{tr("Target date", "목표 날짜")}<input name="milestoneDate" type="date" required defaultValue={editingMilestone?.milestoneDate ?? new Date().toISOString().slice(0,10)} /></label><label>{tr("Stage", "단계")}<select name="stage" defaultValue={editingMilestone?.stage ?? "UP NEXT"}><option>UP NEXT</option><option>PRODUCTION</option><option>REVIEW</option><option>RELEASE</option><option>COMPLETE</option></select></label></div><label>{tr("Description", "설명")}<textarea name="note" maxLength={1000} defaultValue={editingMilestone?.note ?? ""} placeholder={tr("Define the delivery target and success criteria…", "출시 목표와 성공 조건을 입력하세요…")} /></label><div className="form-row milestone-number-row"><label>{tr("Progress", "진행률")}<input name="progress" type="number" min="0" max="100" defaultValue={editingMilestone?.progress ?? 0} /></label><label>{tr("Completed cards", "완료 카드")}<input name="completedCards" type="number" min="0" defaultValue={editingMilestone?.completedCards ?? 0} /></label><label>{tr("Total cards", "전체 카드")}<input name="totalCards" type="number" min="0" defaultValue={editingMilestone?.totalCards ?? 0} /></label></div><label>{tr("Color", "색상")}<select name="color" defaultValue={editingMilestone?.color ?? "violet"}><option value="violet">{tr("Violet", "보라")}</option><option value="mint">{tr("Mint", "민트")}</option><option value="coral">{tr("Coral", "코랄")}</option></select></label><footer className="milestone-editor-footer">{editingMilestone ? <button className="danger-button" type="button" onClick={() => void deleteMilestone(editingMilestone)}>{tr("Delete milestone", "마일스톤 삭제")}</button> : <span />}<div><button type="button" onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{editingMilestone ? tr("Save changes", "변경 저장") : tr("Create milestone", "마일스톤 만들기")}</button></div></footer></form></section></div>}
+    {milestoneEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}><section className="modal create-modal milestone-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("Create milestone", "마일스톤 만들기")}><header><div><small>{tr("ROADMAP TARGET", "로드맵 목표")}</small><h2>{editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("New milestone", "새 마일스톤")}</h2></div><button onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }} aria-label="Close">×</button></header><form onSubmit={saveMilestone}><label>{tr("Milestone title", "마일스톤 제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingMilestone?.title ?? ""} placeholder={tr("What are you shipping?", "어떤 목표를 출시하나요?")} /></label><div className="form-row"><label>{tr("Target date", "목표 날짜")}<input name="milestoneDate" type="date" required value={milestoneDraftDate} onChange={event => setMilestoneDraftDate(event.target.value)} /></label><label>{tr("Stage", "단계")}<select name="stage" defaultValue={editingMilestone?.stage ?? "UP NEXT"}><option>UP NEXT</option><option>PRODUCTION</option><option>REVIEW</option><option>RELEASE</option><option>COMPLETE</option></select></label></div><label>{tr("Description", "설명")}<textarea name="note" maxLength={1000} defaultValue={editingMilestone?.note ?? ""} placeholder={tr("Define the delivery target and success criteria…", "출시 목표와 성공 조건을 입력하세요…")} /></label><section className="milestone-auto-panel" aria-live="polite"><header><span>✦</span><div><b>{tr("Automatic progress", "자동 진행률")}</b><small>{tr("Active-project cards due by this target date", "이 목표일까지 마감되는 활성 프로젝트 카드")}</small></div></header><div><article><small>{tr("PROGRESS", "진행률")}</small><b>{milestoneDraftStats.progress}%</b></article><article><small>{tr("COMPLETED", "완료")}</small><b>{milestoneDraftStats.completedCards}</b></article><article><small>{tr("TOTAL CARDS", "전체 카드")}</small><b>{milestoneDraftStats.totalCards}</b></article></div><p>{milestoneDraftStats.unscheduledCards > 0 ? tr(`${milestoneDraftStats.unscheduledCards} cards without a due date are not included.`, `마감일이 없는 카드 ${milestoneDraftStats.unscheduledCards}개는 포함되지 않습니다.`) : tr("Every active card has a due date and is eligible for tracking.", "모든 활성 카드에 마감일이 있어 자동 추적할 수 있습니다.")}</p></section><label>{tr("Color", "색상")}<select name="color" defaultValue={editingMilestone?.color ?? "violet"}><option value="violet">{tr("Violet", "보라")}</option><option value="mint">{tr("Mint", "민트")}</option><option value="coral">{tr("Coral", "코랄")}</option></select></label><footer className="milestone-editor-footer">{editingMilestone ? <button className="danger-button" type="button" onClick={() => void deleteMilestone(editingMilestone)}>{tr("Delete milestone", "마일스톤 삭제")}</button> : <span />}<div><button type="button" onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{editingMilestone ? tr("Save changes", "변경 저장") : tr("Create milestone", "마일스톤 만들기")}</button></div></footer></form></section></div>}
 
     {editMember && <div className="modal-backdrop" onMouseDown={() => setEditMember(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit member", "멤버 수정")}><header><div><small>{tr("MEMBER ACCESS", "멤버 권한")}</small><h2>{tr("Edit member", "멤버 수정")}</h2></div><button onClick={() => setEditMember(null)} aria-label="Close">×</button></header><form onSubmit={saveMemberEdits}><label>{tr("Name", "이름")}<input name="name" required autoFocus defaultValue={editMember.name} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required defaultValue={editMember.email} /></label><div className="form-row"><label>{tr("Primary discipline", "주요 분야")}<select name="discipline" required defaultValue={editMember.discipline}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editMember.status}><option>Active</option><option>Invited</option></select></label></div><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role" defaultValue={editMember.role} disabled={editMember.role === "Owner"}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select>{editMember.role === "Owner" && <input type="hidden" name="role" value="Owner" />}</label><footer className="member-edit-footer">{editMember.role !== "Owner" ? <button className="danger-button" type="button" onClick={() => void removeMember(editMember)}>{tr("Remove member", "멤버 삭제")}</button> : <span />}<div><button type="button" onClick={() => setEditMember(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save member", "멤버 저장")}</button></div></footer></form></section></div>}
 
