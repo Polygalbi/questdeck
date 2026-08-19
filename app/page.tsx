@@ -834,6 +834,28 @@ export default function Home() {
     }
   }
 
+  async function deleteArchivedProject(item: Project) {
+    if (item.status !== "Archived") return;
+    if (!window.confirm(tr(
+      `Permanently delete “${item.name}” and all of its cards and sub-tasks? This cannot be undone.`,
+      `“${item.name}” 프로젝트와 모든 카드 및 하위 작업을 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.`,
+    ))) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    try {
+      await syncQuestdeck("delete_project", { projectId: item.id }, accessToken);
+      const deletedCardIds = new Set(cards.filter(card => card.project === item.name).map(card => card.id));
+      setProjects(current => current.filter(projectItem => projectItem.id !== item.id));
+      setCards(current => current.filter(card => card.project !== item.name));
+      setSubTodos(current => Object.fromEntries(Object.entries(current).filter(([cardId]) => !deletedCardIds.has(Number(cardId)))));
+      if (project === item.name) setProject("All projects");
+      if (defaultProjectId === item.id) setDefaultProjectId(activeProjects.find(projectItem => projectItem.id !== item.id)?.id ?? "");
+      setToast(tr(`${item.name} permanently deleted`, `${item.name} 프로젝트를 영구 삭제했습니다`));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not delete project", "프로젝트를 삭제하지 못했습니다"));
+    }
+  }
+
   async function toggleRolePermission(roleName: RoleName, key: PermissionKey) {
     if (roleName === "Owner") return;
     const accessToken = requireSession();
@@ -956,12 +978,17 @@ export default function Home() {
   const accountInitials = accountName.split(/\s+|@/).filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
   const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId && workspace.status === "Active") ?? workspaces.find(workspace => workspace.status === "Active") ?? initialWorkspaces[0];
   const activeProjects = projects.filter(item => item.status !== "Archived");
+  const activeProjectNames = new Set(activeProjects.map(item => item.name));
+  const activeCards = cards.filter(card => activeProjectNames.has(card.project));
+  const activeOpenCards = activeCards.filter(card => card.status !== "Done");
+  const activeOverdueCards = activeOpenCards.filter(card => card.dueDate && new Date(`${card.dueDate}T23:59:59`) < new Date());
+  const activeAttentionCards = activeOpenCards.filter(card => card.priority >= 8 || activeOverdueCards.some(overdue => overdue.id === card.id));
   const defaultProjectName = activeProjects.find(item => item.id === defaultProjectId)?.name ?? activeProjects[0]?.name ?? "";
   const currentMember = members.find(member => member.email.toLowerCase() === accountEmail?.toLowerCase()) ?? members.find(member => member.role === "Owner");
   const unreadCount = notifications.filter(notification => !notification.read).length;
   const visibleProjects = projects.filter(item => (projectStatusFilter === "All" || item.status === projectStatusFilter) && `${item.name} ${item.owner}`.toLowerCase().includes(projectSearch.toLowerCase()));
   const visibleMembers = members.filter(member => memberRoleFilter === "All" || member.role === memberRoleFilter);
-  const visibleActivity = activityEvents.filter(item => activityFilter === "All activity" || item.type === activityFilter);
+  const visibleActivity = activityEvents.filter(item => activeProjectNames.has(item.project) && (activityFilter === "All activity" || item.type === activityFilter));
   const tr = (english: string, korean: string) => language === "ko" ? korean : english;
   const statusLabel = (status: Status | Project["status"]) => ({ Ready: tr("Ready", "준비"), "In progress": tr("In progress", "진행 중"), Review: tr("Review", "검토"), Done: tr("Done", "완료"), Active: tr("Active", "활성"), "On hold": tr("On hold", "보류"), Archived: tr("Archived", "보관됨") }[status]);
   const selectedTodos = selected ? (subTodos[selected.id] ?? []) : [];
@@ -1064,7 +1091,7 @@ export default function Home() {
       <nav>
         <p className="nav-label">{tr("PLAN", "계획")}</p>
         <button className={`nav-item ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")}><span>⌂</span> {tr("Overview", "개요")}</button>
-        <button className={`nav-item ${view === "quests" ? "active" : ""}`} onClick={() => setView("quests")}><span>▤</span> {tr("Production board", "프로덕션 보드")} <i>{cards.filter(c => c.status !== "Done").length}</i></button>
+        <button className={`nav-item ${view === "quests" ? "active" : ""}`} onClick={() => setView("quests")}><span>▤</span> {tr("Production board", "프로덕션 보드")} <i>{activeOpenCards.length}</i></button>
         <button className={`nav-item ${view === "timeline" ? "active" : ""}`} onClick={() => setView("timeline")}><span>↔</span> {tr("Timeline", "타임라인")}</button>
         <button className={`nav-item ${view === "documents" ? "active" : ""}`} onClick={() => setView("documents")}><span>▧</span> {tr("Documents", "문서")} <i>{documents.length}</i></button>
         <button className={`nav-item ${view === "milestones" ? "active" : ""}`} onClick={() => setView("milestones")}><span>◎</span> {tr("Milestones", "마일스톤")}</button>
@@ -1099,9 +1126,9 @@ export default function Home() {
       {view === "overview" && <div className="content">
         <div className="welcome"><div><p>{tr("MONDAY, AUGUST 18", "8월 18일 월요일")}</p><h1>{tr(`Good morning, ${accountName}`, `좋은 아침이에요, ${accountName}`)} <span>✦</span></h1><h2>{tr("Here’s what’s moving in your world.", "오늘 스튜디오에서 진행 중인 작업이에요.")}</h2></div><div className="team"><span>MK</span><span>JL</span><span>AS</span><span>+4</span></div></div>
         <div className="stats">
-          <article><span className="stat-icon purple-bg">✓</span><div><small>{tr("COMPLETED THIS WEEK", "이번 주 완료")}</small><strong>{cards.filter(c => c.status === "Done").length + 16}</strong><p><b>↑ 24%</b> {tr("from last week", "지난주 대비")}</p></div></article>
-          <article><span className="stat-icon coral-bg">◷</span><div><small>{tr("IN PROGRESS", "진행 중")}</small><strong>{cards.filter(c => c.status === "In progress").length + 10}</strong><p>{tr("Across 3 projects", "3개 프로젝트")}</p></div></article>
-          <article><span className="stat-icon amber-bg">!</span><div><small>{tr("NEEDS ATTENTION", "확인 필요")}</small><strong>5</strong><p><b className="warn">{tr("2 overdue", "2개 기한 초과")}</b></p></div></article>
+          <article><span className="stat-icon purple-bg">✓</span><div><small>{tr("COMPLETED", "완료")}</small><strong>{activeCards.filter(card => card.status === "Done").length}</strong><p>{tr("Across active projects", "활성 프로젝트 기준")}</p></div></article>
+          <article><span className="stat-icon coral-bg">◷</span><div><small>{tr("IN PROGRESS", "진행 중")}</small><strong>{activeCards.filter(card => card.status === "In progress").length}</strong><p>{tr(`Across ${activeProjects.length} active projects`, `활성 프로젝트 ${activeProjects.length}개`)}</p></div></article>
+          <article><span className="stat-icon amber-bg">!</span><div><small>{tr("NEEDS ATTENTION", "확인 필요")}</small><strong>{activeAttentionCards.length}</strong><p><b className="warn">{tr(`${activeOverdueCards.length} overdue`, `${activeOverdueCards.length}개 기한 초과`)}</b></p></div></article>
         </div>
         <div className="section-heading"><div><h3>{tr("Your hand", "내 카드")}</h3><p>{tr("Cards ready for you to play next.", "다음으로 진행할 준비가 된 카드입니다.")}</p></div><button onClick={() => setView("quests")}>{tr("View all", "전체 보기")} <span>→</span></button></div>
         <div className="card-grid hand-grid">{filtered.filter(card => card.status !== "Done").slice(0, 3).map(card => <QuestCard card={card} onOpen={setSelected} todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}</div>
@@ -1197,7 +1224,7 @@ export default function Home() {
         </div>
       </div>}
 
-      {view === "projects-management" && <div className="content projects-admin-content"><div className="page-title"><div><p>{tr("PORTFOLIO", "포트폴리오")}</p><h1>{tr("Manage projects", "프로젝트 관리")}</h1><h2>{tr("Create, organize, and monitor every stream of studio work.", "스튜디오의 모든 작업을 만들고 정리하고 모니터링하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.workspace_settings} onClick={() => setCreateProjectOpen(true)}>＋ {tr("New project", "새 프로젝트")}</button></div><div className="project-admin-toolbar"><div>{["All","Active","On hold","Archived"].map(status => <button className={projectStatusFilter === status ? "active" : ""} onClick={() => setProjectStatusFilter(status)} key={status}>{status === "All" ? tr("All", "전체") : statusLabel(status as Project["status"])}<span>{status === "All" ? projects.length : projects.filter(item => item.status === status).length}</span></button>)}</div><label>⌕ <input value={projectSearch} onChange={event => setProjectSearch(event.target.value)} placeholder={tr("Search projects…", "프로젝트 검색…")} /></label></div><section className="project-admin-list">{visibleProjects.map(item => <article className="project-admin-card" key={item.id}><span className={`project-color ${item.color}`} /><div className="project-main"><header><div><small>{statusLabel(item.status)}</small><h3>{item.name}</h3></div><button onClick={() => setEditProject(item)} aria-label={`Edit ${item.name}`}>✎</button></header><p><span className="member-avatar">{item.owner.split(/\s+/).map(part => part[0]).join("")}</span> {tr("Led by", "담당")} {item.owner}</p><div className="project-progress"><div><span style={{width:`${item.progress}%`}} /></div><b>{item.progress}%</b></div><footer><span><b>{item.count}</b> {tr("cards", "카드")}</span><span>{tr("Updated", "업데이트")} {item.updated}</span></footer></div><aside>{item.status !== "Archived" && <button onClick={() => { setProject(item.name); setView("quests"); }}>{tr("Open board", "보드 열기")} →</button>}<button onClick={() => setEditProject(item)}>✎ {tr("Edit project", "프로젝트 수정")}</button><button onClick={() => void toggleProjectArchive(item)}>{item.status === "Archived" ? tr("Restore project", "프로젝트 복원") : tr("Archive project", "프로젝트 보관")}</button></aside></article>)}</section>{visibleProjects.length === 0 && <div className="empty-projects"><span>◇</span><h3>{tr("No projects here", "프로젝트가 없습니다")}</h3><p>{tr("Change the filter or create a new project.", "필터를 변경하거나 새 프로젝트를 만드세요.")}</p></div>}</div>}
+      {view === "projects-management" && <div className="content projects-admin-content"><div className="page-title"><div><p>{tr("PORTFOLIO", "포트폴리오")}</p><h1>{tr("Manage projects", "프로젝트 관리")}</h1><h2>{tr("Create, organize, and monitor every stream of studio work.", "스튜디오의 모든 작업을 만들고 정리하고 모니터링하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.workspace_settings} onClick={() => setCreateProjectOpen(true)}>＋ {tr("New project", "새 프로젝트")}</button></div><div className="project-admin-toolbar"><div>{["All","Active","On hold","Archived"].map(status => <button className={projectStatusFilter === status ? "active" : ""} onClick={() => setProjectStatusFilter(status)} key={status}>{status === "All" ? tr("All", "전체") : statusLabel(status as Project["status"])}<span>{status === "All" ? projects.length : projects.filter(item => item.status === status).length}</span></button>)}</div><label>⌕ <input value={projectSearch} onChange={event => setProjectSearch(event.target.value)} placeholder={tr("Search projects…", "프로젝트 검색…")} /></label></div><section className="project-admin-list">{visibleProjects.map(item => <article className="project-admin-card" key={item.id}><span className={`project-color ${item.color}`} /><div className="project-main"><header><div><small>{statusLabel(item.status)}</small><h3>{item.name}</h3></div><button onClick={() => setEditProject(item)} aria-label={`Edit ${item.name}`}>✎</button></header><p><span className="member-avatar">{item.owner.split(/\s+/).map(part => part[0]).join("")}</span> {tr("Led by", "담당")} {item.owner}</p><div className="project-progress"><div><span style={{width:`${item.progress}%`}} /></div><b>{item.progress}%</b></div><footer><span><b>{item.count}</b> {tr("cards", "카드")}</span><span>{tr("Updated", "업데이트")} {item.updated}</span></footer></div><aside>{item.status !== "Archived" && <button onClick={() => { setProject(item.name); setView("quests"); }}>{tr("Open board", "보드 열기")} →</button>}<button onClick={() => setEditProject(item)}>✎ {tr("Edit project", "프로젝트 수정")}</button><button onClick={() => void toggleProjectArchive(item)}>{item.status === "Archived" ? tr("Restore project", "프로젝트 복원") : tr("Archive project", "프로젝트 보관")}</button>{item.status === "Archived" && <button className="project-delete-button" disabled={Boolean(session) && !currentPermissions?.workspace_settings} onClick={() => void deleteArchivedProject(item)}>× {tr("Delete permanently", "영구 삭제")}</button>}</aside></article>)}</section>{visibleProjects.length === 0 && <div className="empty-projects"><span>◇</span><h3>{tr("No projects here", "프로젝트가 없습니다")}</h3><p>{tr("Change the filter or create a new project.", "필터를 변경하거나 새 프로젝트를 만드세요.")}</p></div>}</div>}
 
       {view === "roles" && <div className="content roles-content"><div className="page-title"><div><p>{tr("PERMISSIONS", "권한")}</p><h1>{tr("Roles & access", "역할 및 권한")}</h1><h2>{tr("Choose what each teammate can see, change, and manage.", "각 팀원이 보고 변경하고 관리할 수 있는 항목을 설정하세요.")}</h2></div><button className="secondary-button" disabled={Boolean(session) && !currentPermissions?.manage_members} onClick={() => { setView("management"); setInviteOpen(true); }}>＋ {tr("Assign a role", "역할 지정")}</button></div><div className="role-cards">{roleDefinitions.map(role => { const roleCount = members.filter(member => member.role === role.name).length; return <article className="role-card" key={role.name}><span className={`role-icon ${role.color}`}>{role.name[0]}</span><div><small>{roleCount} {tr(roleCount === 1 ? "PERSON" : "PEOPLE", "명")}</small><h3>{role.name}</h3><p>{role.description}</p></div><button onClick={() => { setMemberRoleFilter(role.name); setView("management"); }}>{tr("View members", "멤버 보기")} →</button></article>; })}</div><section className="management-card permission-matrix"><header><div><small>{tr("ACCESS MATRIX", "권한 매트릭스")}</small><h3>{tr("Role permissions", "역할 권한")}</h3></div><span>{currentPermissions?.billing_security ? tr("Click a permission to change it", "권한을 클릭하여 변경하세요") : `${tr("Changes apply across", "적용 대상")} ${activeWorkspace.name}`}</span></header><div className="matrix-row matrix-head"><b>{tr("Capability", "기능")}</b>{roleDefinitions.map(role => <b key={role.name}>{role.name}</b>)}</div>{permissionRows.map(permission => <div className="matrix-row" key={permission.key}><span>{tr(permission.english,permission.korean)}</span>{roleDefinitions.map(role => <button className={`permission-toggle ${role.permissions[permission.key] ? "allowed" : "denied"}`} disabled={role.name === "Owner" || !currentPermissions?.billing_security} onClick={() => void toggleRolePermission(role.name, permission.key)} aria-label={`${role.name}: ${permission.english}`} key={role.name}>{role.permissions[permission.key] ? "✓" : "—"}</button>)}</div>)}</section></div>}
 
