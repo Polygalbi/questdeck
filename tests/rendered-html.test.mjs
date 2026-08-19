@@ -57,3 +57,18 @@ test("includes working document editing and table controls", async () => {
   assert.match(css, /caret-color:#6248cf/);
   assert.match(css, /\.document-editor-assist/);
 });
+
+test("includes persistent Hero Cards, sub-cards, and Journey templates", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /HERO_CHILD_PREFIX/);
+  assert.match(page, /promoteSelectedToHero/);
+  assert.match(page, /linkExistingHeroChild/);
+  assert.match(page, /createHeroChild/);
+  assert.match(page, /startHeroJourney/);
+  assert.match(page, /hero-progress-card/);
+  assert.match(css, /\.hero-card-panel/);
+  assert.match(css, /\.hero-card-chip/);
+});

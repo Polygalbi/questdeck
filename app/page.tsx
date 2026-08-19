@@ -17,6 +17,7 @@ type Notification = { id: number; title: string; detail: string; time: string; i
 type ActivityEvent = { id: number; person: string; initials: string; action: string; target: string; detail: string; project: string; type: string; time: string; tone: string; destination: View; createdAt: string };
 type Project = { id: string; name: string; count: number; color: string; owner: string; status: "Active" | "On hold" | "Archived"; progress: number; updated: string };
 type SubTodo = { id: number; text: string; done: boolean };
+type JourneyTemplate = { id: string; name: string; nameKo: string; steps: string[]; stepsKo: string[] };
 type ProductionDiscipline = { id: number; name: string; color: string };
 type WorkspaceDocument = { id: number; title: string; content: string; createdByEmail: string; ownerName: string; isPublished: boolean; shareSlug: string; createdAt: string; updatedAt: string };
 type DocumentComment = { id: number; documentId: number; userId: string; authorEmail: string; authorName: string; body: string; createdAt: string };
@@ -67,6 +68,17 @@ const DOCUMENT_IMAGE_BUCKET = "questdeck-document-images";
 const DOCUMENT_IMAGE_PUBLIC_PREFIX = `${SUPABASE_URL}/storage/v1/object/public/${DOCUMENT_IMAGE_BUCKET}/`;
 const documentImagePathPattern = /^[0-9a-f-]{36}\/\d+\/[a-zA-Z0-9._-]+$/i;
 const documentImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const HERO_MARKER = "__questdeck_hero__";
+const HERO_CHILD_PREFIX = "__questdeck_hero_child__:";
+const journeyTemplates: JourneyTemplate[] = [
+  { id: "feature", name: "Feature journey", nameKo: "기능 제작 여정", steps: ["Define the experience", "Build the first pass", "Playtest and review", "Polish and ship"], stepsKo: ["경험 정의", "첫 버전 제작", "플레이테스트 및 검토", "다듬기 및 출시"] },
+  { id: "asset", name: "Asset journey", nameKo: "에셋 제작 여정", steps: ["Create the brief", "Produce the asset", "Review in context", "Final polish"], stepsKo: ["브리프 작성", "에셋 제작", "게임 내 검토", "최종 다듬기"] },
+  { id: "release", name: "Release journey", nameKo: "출시 여정", steps: ["Plan the release", "Prepare the build", "Quality check", "Publish and monitor"], stepsKo: ["출시 계획", "빌드 준비", "품질 확인", "게시 및 모니터링"] },
+];
+
+function visibleSubTodos(items: SubTodo[]) { return items.filter(item => item.text !== HERO_MARKER && !item.text.startsWith(HERO_CHILD_PREFIX)); }
+function heroChildIds(items: SubTodo[]) { return items.filter(item => item.text.startsWith(HERO_CHILD_PREFIX)).map(item => Number(item.text.slice(HERO_CHILD_PREFIX.length))).filter(Number.isFinite); }
+function hasHeroMarker(items: SubTodo[]) { return items.some(item => item.text === HERO_MARKER); }
 const richTextTags = new Set(["p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "a", "table", "thead", "tbody", "tr", "th", "td", "hr", "figure", "figcaption", "img"]);
 function escapeHtml(value: string) { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;"); }
 function sanitizeRichText(value: string) {
@@ -231,10 +243,10 @@ function priorityTone(priority: number) {
   return "normal";
 }
 
-function QuestCard({ card, onOpen, compact = false, todoSummary, draggable = false, dragging = false, onDragStart, onDragEnd, onPreviewStart, onPreviewEnd }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number }; draggable?: boolean; dragging?: boolean; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void; onPreviewStart?: (card: Card, element: HTMLButtonElement, todoSummary?: { completed: number; total: number }) => void; onPreviewEnd?: () => void }) {
+function QuestCard({ card, onOpen, compact = false, todoSummary, draggable = false, dragging = false, onDragStart, onDragEnd, onPreviewStart, onPreviewEnd }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number; isHero?: boolean; heroChildren?: number; heroCompleted?: number; parentHero?: boolean }; draggable?: boolean; dragging?: boolean; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void; onPreviewStart?: (card: Card, element: HTMLButtonElement, todoSummary?: { completed: number; total: number }) => void; onPreviewEnd?: () => void }) {
   return <button className={`quest-card priority-${priorityTone(card.priority)} ${compact ? "compact" : ""} ${dragging ? "board-card-dragging" : ""}`} onClick={() => { onPreviewEnd?.(); onOpen(card); }} aria-label={`Open ${card.title}`} draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onMouseEnter={event => onPreviewStart?.(card, event.currentTarget, todoSummary)} onMouseLeave={onPreviewEnd} onFocus={event => onPreviewStart?.(card, event.currentTarget, todoSummary)} onBlur={onPreviewEnd}>
     <div className={`card-accent ${card.color}`}><span>{card.tag}</span><b className={`priority-badge ${priorityTone(card.priority)}`}>P{card.priority}</b><b>{card.points}</b></div>
-    <div className="card-body"><small>{card.project.toUpperCase()}</small><h4>{card.title}</h4>{!compact && <p>{card.description}</p>}{todoSummary && todoSummary.total > 0 && <div className="card-subtask-progress" aria-label={`${todoSummary.completed} of ${todoSummary.total} sub-tasks complete`}><span><i style={{width:`${(todoSummary.completed / todoSummary.total) * 100}%`}} /></span><b>☑ {todoSummary.completed}/{todoSummary.total}</b></div>}<div className="card-footer"><span className="avatar">{card.owner}</span><span>◷ {card.due}</span><span>◌ {card.id % 4}</span></div></div>
+    <div className="card-body"><small>{card.project.toUpperCase()}</small><h4>{card.title}</h4>{!compact && <p>{card.description}</p>}{todoSummary?.isHero && <div className="hero-card-chip"><b>★ HERO</b><span>{todoSummary.heroCompleted}/{todoSummary.heroChildren} cards</span></div>}{todoSummary?.parentHero && <div className="hero-child-chip">↳ HERO CARD</div>}{todoSummary && todoSummary.total > 0 && <div className="card-subtask-progress" aria-label={`${todoSummary.completed} of ${todoSummary.total} sub-tasks complete`}><span><i style={{width:`${(todoSummary.completed / todoSummary.total) * 100}%`}} /></span><b>☑ {todoSummary.completed}/{todoSummary.total}</b></div>}<div className="card-footer"><span className="avatar">{card.owner}</span><span>◷ {card.due}</span><span>◌ {card.id % 4}</span></div></div>
   </button>;
 }
 
@@ -304,6 +316,8 @@ export default function Home() {
   const [editColumn, setEditColumn] = useState<Status | null>(null);
   const [columnNames, setColumnNames] = useState<Partial<Record<Status, string>>>({});
   const [selected, setSelected] = useState<Card | null>(null);
+  const [heroPanelOpen, setHeroPanelOpen] = useState(false);
+  const [heroChildTitle, setHeroChildTitle] = useState("");
   const [toast, setToast] = useState("");
   const [account, setAccount] = useState<Account | null>(null);
   const [members, setMembers] = useState<Member[]>(initialMembers);
@@ -1191,6 +1205,97 @@ export default function Home() {
     }
   }
 
+  function persistHeroItems(cardId: number, items: SubTodo[], message?: string) {
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    setSubTodos(current => ({ ...current, [cardId]: items }));
+    void syncQuestdeck("replace_subtasks", { cardId, items }, accessToken).catch(() => setToast(tr("Hero links saved locally; Supabase sync failed", "Hero 연결은 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+    if (message) setToast(message);
+  }
+
+  function promoteSelectedToHero() {
+    if (!selected) return;
+    const items = subTodos[selected.id] ?? [];
+    if (hasHeroMarker(items)) return;
+    persistHeroItems(selected.id, [{ id: Date.now(), text: HERO_MARKER, done: false }, ...items], tr("Hero card created", "Hero 카드를 만들었습니다"));
+  }
+
+  function linkExistingHeroChild(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    const childId = Number(new FormData(event.currentTarget).get("heroChildId"));
+    if (!Number.isFinite(childId) || childId === selected.id) return;
+    const items = subTodos[selected.id] ?? [];
+    const linked = new Set(heroChildIds(items));
+    if (linked.has(childId)) return;
+    const next = [
+      ...(hasHeroMarker(items) ? items : [{ id: Date.now(), text: HERO_MARKER, done: false }, ...items]),
+      { id: Date.now() + 1, text: `${HERO_CHILD_PREFIX}${childId}`, done: false },
+    ];
+    persistHeroItems(selected.id, next, tr("Card linked to Hero", "카드를 Hero에 연결했습니다"));
+    event.currentTarget.reset();
+  }
+
+  function unlinkHeroChild(heroId: number, childId: number) {
+    const items = subTodos[heroId] ?? [];
+    persistHeroItems(heroId, items.filter(item => item.text !== `${HERO_CHILD_PREFIX}${childId}`), tr("Card removed from Hero", "카드를 Hero에서 분리했습니다"));
+  }
+
+  function createHeroChild(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected || !heroChildTitle.trim()) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const child: Card = {
+      ...selected,
+      id: Date.now(),
+      title: heroChildTitle.trim(),
+      description: tr(`Part of ${selected.title}.`, `${selected.title} Hero 카드의 하위 카드입니다.`),
+      points: 3,
+      status: "Ready",
+      due: "No date",
+      dueDate: null,
+      startDate: null,
+      archived: false,
+    };
+    const items = subTodos[selected.id] ?? [];
+    const next = [
+      ...(hasHeroMarker(items) ? items : [{ id: Date.now() + 1, text: HERO_MARKER, done: false }, ...items]),
+      { id: Date.now() + 2, text: `${HERO_CHILD_PREFIX}${child.id}`, done: false },
+    ];
+    setCards(current => [child, ...current]);
+    setHeroChildTitle("");
+    persistHeroItems(selected.id, next, tr("Sub-card created", "하위 카드를 만들었습니다"));
+    void syncQuestdeck("create_card", { card: child }, accessToken).catch(() => setToast(tr("Sub-card saved locally; Supabase sync failed", "하위 카드는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+  }
+
+  function startHeroJourney(template: JourneyTemplate) {
+    if (!selected) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const baseId = Date.now();
+    const steps = language === "ko" ? template.stepsKo : template.steps;
+    const children = steps.map((title, index): Card => ({
+      ...selected,
+      id: baseId + index,
+      title,
+      description: tr(`${template.name}: step ${index + 1} of ${steps.length}.`, `${template.nameKo}: ${steps.length}단계 중 ${index + 1}단계입니다.`),
+      points: 3,
+      status: "Ready",
+      due: "No date",
+      dueDate: null,
+      startDate: null,
+      archived: false,
+    }));
+    const items = subTodos[selected.id] ?? [];
+    const existingIds = new Set(heroChildIds(items));
+    const markers = children.filter(child => !existingIds.has(child.id)).map((child, index) => ({ id: baseId + 100 + index, text: `${HERO_CHILD_PREFIX}${child.id}`, done: false }));
+    const next = [...(hasHeroMarker(items) ? items : [{ id: baseId + 99, text: HERO_MARKER, done: false }, ...items]), ...markers];
+    setCards(current => [...children, ...current]);
+    persistHeroItems(selected.id, next, tr(`${template.name} started with ${children.length} cards`, `${template.nameKo}에 ${children.length}개 카드가 생성되었습니다`));
+    children.forEach(child => void syncQuestdeck("create_card", { card: child }, accessToken).catch(() => setToast(tr("Some Journey cards could not sync", "일부 여정 카드를 동기화하지 못했습니다"))));
+  }
+
   function addSubTodo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
@@ -1767,8 +1872,21 @@ export default function Home() {
   }, new Map()).values()).sort((a, b) => b.count - a.count).slice(0, 3);
   const tr = (english: string, korean: string) => language === "ko" ? korean : english;
   const statusLabel = (status: Status | Project["status"]) => ({ Ready: tr("Ready", "준비"), "In progress": tr("In progress", "진행 중"), Review: tr("Review", "검토"), Done: tr("Done", "완료"), Active: tr("Active", "활성"), "On hold": tr("On hold", "보류"), Archived: tr("Archived", "보관됨") }[status]);
-  const selectedTodos = selected ? (subTodos[selected.id] ?? []) : [];
+  const selectedRawTodos = selected ? (subTodos[selected.id] ?? []) : [];
+  const selectedTodos = visibleSubTodos(selectedRawTodos);
   const completedSubTodos = selectedTodos.filter(todo => todo.done).length;
+  const selectedHeroIds = selected ? heroChildIds(selectedRawTodos) : [];
+  const selectedHeroChildren = cards.filter(card => selectedHeroIds.includes(card.id));
+  const selectedHeroCompleted = selectedHeroChildren.filter(card => card.status === "Done").length;
+  const selectedHeroParent = selected ? cards.find(card => heroChildIds(subTodos[card.id] ?? []).includes(selected.id)) ?? null : null;
+  const heroCandidateCards = selected ? cards.filter(card => card.id !== selected.id && !card.archived && !selectedHeroIds.includes(card.id) && !cards.some(parent => heroChildIds(subTodos[parent.id] ?? []).includes(card.id))) : [];
+  const cardTodoSummary = (card: Card) => {
+    const items = subTodos[card.id] ?? [];
+    const todos = visibleSubTodos(items);
+    const childIds = heroChildIds(items);
+    const heroChildren = cards.filter(item => childIds.includes(item.id));
+    return { completed: todos.filter(todo => todo.done).length, total: todos.length, isHero: hasHeroMarker(items), heroChildren: heroChildren.length, heroCompleted: heroChildren.filter(item => item.status === "Done").length, parentHero: cards.some(item => heroChildIds(subTodos[item.id] ?? []).includes(card.id)) };
+  };
   const activeCardOwners = members.filter(member => member.status === "Active");
   const selectedOwner = selected ? members.find(member => member.initials === selected.owner) : null;
   const timelineDayCount = timelineScale === "2 weeks" ? 14 : timelineScale === "Month" ? 28 : 84;
@@ -1987,7 +2105,7 @@ export default function Home() {
           <article><span className="stat-icon amber-bg">!</span><div><small>{tr("NEEDS ATTENTION", "확인 필요")}</small><strong>{activeAttentionCards.length}</strong><p><b className="warn">{tr(`${activeOverdueCards.length} overdue`, `${activeOverdueCards.length}개 기한 초과`)}</b></p></div></article>
         </div>
         <div className="section-heading"><div><h3>{tr("Your hand", "내 카드")}</h3><p>{tr("Cards ready for you to play next.", "다음으로 진행할 준비가 된 카드입니다.")}</p></div><button onClick={() => setView("quests")}>{tr("View all", "전체 보기")} <span>→</span></button></div>
-        <div className="card-grid hand-grid">{filtered.filter(card => card.status !== "Done").slice(0, 3).map(card => <QuestCard card={card} onOpen={setSelected} todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}</div>
+        <div className="card-grid hand-grid">{filtered.filter(card => card.status !== "Done").slice(0, 3).map(card => <QuestCard card={card} onOpen={setSelected} todoSummary={cardTodoSummary(card)} key={card.id}/>)}</div>
         <div className="overview-bottom">
           <section className="milestone-preview">{nextMilestone ? <><div className="mini-title"><div><small>{tr("NEXT MILESTONE", "다음 마일스톤")}</small><h3>{nextMilestone.title}</h3></div><b>{Math.max(0, Math.ceil((new Date(`${nextMilestone.milestoneDate}T12:00:00`).getTime() - milestoneToday.getTime()) / dayMs))} {tr("days", "일")}</b></div><div className="progress-track"><span className={nextMilestone.color} style={{width:`${nextMilestone.progress}%`}}/></div><p><b>{nextMilestone.completedCards} {tr("of", "/")} {nextMilestone.totalCards} {tr("cards", "카드")}</b> {tr("completed", "완료")} <span>{nextMilestone.progress}%</span></p><div className="milestone-tags"><i>{nextMilestone.stage}</i><i>{new Date(`${nextMilestone.milestoneDate}T12:00:00`).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric" })}</i><button onClick={() => setView("milestones")}>{tr("Manage", "관리")} →</button></div></> : <><div className="mini-title"><div><small>{tr("MILESTONES", "마일스톤")}</small><h3>{tr("No milestones yet", "아직 마일스톤이 없습니다")}</h3></div></div><button className="secondary-button" onClick={() => setView("milestones")}>{tr("Create one", "만들기")} →</button></>}</section>
           <section className="activity"><div className="mini-title"><div><small>LIVE PULSE</small><h3>Studio activity</h3></div><button onClick={() => setView("activity")} aria-label="View all activity">•••</button></div><ul><li><span className="pulse-avatar lilac">AS</span><p><b>Alex</b> moved <strong>Boss arena concept</strong> to Review<small>18 minutes ago</small></p></li><li><span className="pulse-avatar aqua">JL</span><p><b>Jules</b> completed <strong>Cave reverb zones</strong><small>42 minutes ago</small></p></li><li><span className="pulse-avatar gold">MK</span><p><b>Mina</b> added 2 comments<small>1 hour ago</small></p></li></ul></section>
@@ -2006,7 +2124,7 @@ export default function Home() {
           {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className={`board-column ${boardDropStatus === status ? "board-drop-target" : ""}`} key={status} onDragEnter={event => { event.preventDefault(); if (draggedBoardCard) { setBoardDropStatus(status); setBoardDropAction(null); } }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (draggedBoardCard) { setBoardDropStatus(status); setBoardDropAction(null); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBoardDropStatus(current => current === status ? null : current); }} onDrop={event => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-board-card") || draggedBoardCard); if (cardId) void moveBoardCard(cardId, status); }}>
             <header><span className={`status-dot s${index}`}/><h3>{columnNames[status] || statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><div className="column-menu-wrap"><button className={`column-menu-trigger ${activeColumnMenu === status ? "active" : ""}`} onClick={() => setActiveColumnMenu(current => current === status ? null : status)} aria-label={`${columnNames[status] || statusLabel(status)} ${tr("options", "옵션")}`} aria-expanded={activeColumnMenu === status}>•••</button>{activeColumnMenu === status && <div className="column-menu" role="menu"><button role="menuitem" onClick={() => openCreateCard(status)}>＋ <span>{tr("Add card here", "여기에 카드 추가")}</span></button><button role="menuitem" onClick={() => { setEditColumn(status); setActiveColumnMenu(null); }}>✎ <span>{tr("Rename column", "열 이름 변경")}</span></button>{columnNames[status] && <button role="menuitem" onClick={() => resetColumnName(status)}>↺ <span>{tr("Reset name", "기본 이름 복원")}</span></button>}</div>}</div></header>
             <form className="quick-card-form" onSubmit={event => quickAddCard(event, status)}><span>＋</span><input value={quickCardTitles[status] ?? ""} onChange={event => setQuickCardTitles(current => ({ ...current, [status]: event.target.value }))} placeholder={tr("Quick add a card…", "빠르게 카드 추가…")} aria-label={tr(`Quick add to ${statusLabel(status)}`, `${statusLabel(status)}에 빠른 카드 추가`)} maxLength={120}/><button type="submit" disabled={!quickCardTitles[status]?.trim()}>{tr("Add", "추가")}</button></form>
-            <div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact={boardDensity === "compact"} draggable dragging={draggedBoardCard === card.id} onPreviewStart={scheduleCardHoverPreview} onPreviewEnd={hideCardHoverPreview} onDragStart={event => { hideCardHoverPreview(); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-board-card", String(card.id)); setDraggedBoardCard(card.id); setBoardDropStatus(status); setBoardDropAction(null); }} onDragEnd={() => { setDraggedBoardCard(null); setBoardDropStatus(null); setBoardDropAction(null); }} todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}</div>
+            <div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact={boardDensity === "compact"} draggable dragging={draggedBoardCard === card.id} onPreviewStart={scheduleCardHoverPreview} onPreviewEnd={hideCardHoverPreview} onDragStart={event => { hideCardHoverPreview(); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-board-card", String(card.id)); setDraggedBoardCard(card.id); setBoardDropStatus(status); setBoardDropAction(null); }} onDragEnd={() => { setDraggedBoardCard(null); setBoardDropStatus(null); setBoardDropAction(null); }} todoSummary={cardTodoSummary(card)} key={card.id}/>)}</div>
             {boardDropStatus === status && draggedBoardCard && <div className="board-drop-hint">{tr(`Drop in ${statusLabel(status)}`, `${statusLabel(status)}에 놓기`)}</div>}
           </section>)}
         </div>
@@ -2040,7 +2158,7 @@ export default function Home() {
                       const visibleEnd = displayEnd > timelineEnd ? timelineEnd : displayEnd;
                       const start = Math.max(0, Math.floor((visibleStart.getTime() - timelineStart.getTime()) / dayMs));
                       const span = Math.max(1, Math.floor((visibleEnd.getTime() - visibleStart.getTime()) / dayMs) + 1);
-                      const todos = subTodos[card.id] ?? [];
+                      const todos = visibleSubTodos(subTodos[card.id] ?? []);
                       const completed = todos.filter(todo => todo.done).length;
                       return <button onPointerDown={event => { if (!(event.target as HTMLElement).closest(".timeline-resize-handle")) beginTimelineGesture(event, card.id, "move", startDate, endDate); }} onPointerMove={updateTimelineGesture} onPointerUp={event => void finishTimelineGesture(event)} onPointerCancel={cancelTimelineGesture} onMouseEnter={event => { if (!timelineGestureRef.current) showTimelineTooltip(card.id, event.currentTarget); }} onMouseLeave={() => setTimelineHover(null)} onFocus={event => showTimelineTooltip(card.id, event.currentTarget)} onBlur={() => setTimelineHover(null)} className={`run-bar grouped-run-bar ${card.color} timeline-priority-${priorityTone(card.priority)} ${activeGesture ? `gesture-active gesture-${activeGesture.mode}` : ""}`} style={{gridColumn:`${start + 1} / span ${span}`,gridRow:itemIndex + 1}} onClick={event => { if (timelineDidDrag.current) { timelineDidDrag.current = false; event.preventDefault(); return; } setSelected(card); }} aria-label={tr(`Open ${card.title}; drag the middle to move or an edge to resize`, `${card.title} 열기; 가운데를 끌어 이동하거나 가장자리를 끌어 기간 변경`)} key={card.id}>
                         <span className="timeline-resize-handle start-handle" onPointerDown={event => beginTimelineGesture(event, card.id, "start", startDate, endDate)} onPointerMove={updateTimelineGesture} onPointerUp={event => void finishTimelineGesture(event)} onPointerCancel={cancelTimelineGesture} onClick={event => event.stopPropagation()} title={tr("Drag to adjust start date", "시작일을 변경하려면 끌기")} aria-hidden="true" />
@@ -2057,7 +2175,7 @@ export default function Home() {
           </div>
           <footer className="timeline-legend"><span><i className="legend-dot status-in-progress"/> {tr("In progress", "진행 중")}</span><span><i className="legend-dot status-review"/> {tr("Review", "검토")}</span><span><i className="legend-dot status-done"/> {tr("Done", "완료")}</span><span>☑ {tr("Sub-task progress", "하위 작업 진행률")}</span><p>{tr("Drag a card onto another day to reschedule it", "카드를 다른 날짜로 끌어 일정을 변경하세요")}</p></footer>
         </section>
-        {timelineHover && (() => { const card = cards.find(item => item.id === timelineHover.cardId); if (!card) return null; const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; const start = card.startDate ? timelineDateLabel(new Date(`${card.startDate}T12:00:00`)) : card.due; return <aside className="timeline-floating-tooltip" role="tooltip" style={{left:timelineHover.left,top:timelineHover.top}}><b>{card.title}</b><p>{card.description}</p><div><strong>{card.project}</strong><strong>{statusLabel(card.status)}</strong></div><div><strong>◉ {card.owner}</strong><strong>↔ {start} → {card.due}</strong><strong>◆ {card.points}</strong></div>{todos.length > 0 && <footer><b>{tr("Sub-tasks", "하위 작업")} {completed}/{todos.length}</b><span>{todos.slice(0,2).map(todo => `${todo.done ? "✓" : "○"} ${todo.text}`).join(" · ")}</span></footer>}</aside> })()}
+        {timelineHover && (() => { const card = cards.find(item => item.id === timelineHover.cardId); if (!card) return null; const todos = visibleSubTodos(subTodos[card.id] ?? []); const completed = todos.filter(todo => todo.done).length; const start = card.startDate ? timelineDateLabel(new Date(`${card.startDate}T12:00:00`)) : card.due; return <aside className="timeline-floating-tooltip" role="tooltip" style={{left:timelineHover.left,top:timelineHover.top}}><b>{card.title}</b><p>{card.description}</p><div><strong>{card.project}</strong><strong>{statusLabel(card.status)}</strong></div><div><strong>◉ {card.owner}</strong><strong>↔ {start} → {card.due}</strong><strong>◆ {card.points}</strong></div>{todos.length > 0 && <footer><b>{tr("Sub-tasks", "하위 작업")} {completed}/{todos.length}</b><span>{todos.slice(0,2).map(todo => `${todo.done ? "✓" : "○"} ${todo.text}`).join(" · ")}</span></footer>}</aside> })()}
       </div>}
 
       {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Create rich team documents with autosave, discussion, and shareable links.", "자동 저장, 토론, 공유 링크를 지원하는 팀 문서를 만드세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void createBlankDocument()}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{documents.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{richTextExcerpt(document.content).slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => openDocumentEditor(document)}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{documents.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
@@ -2113,6 +2231,8 @@ export default function Home() {
     {editMember && <div className="modal-backdrop" onMouseDown={() => setEditMember(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit member", "멤버 수정")}><header><div><small>{tr("MEMBER ACCESS", "멤버 권한")}</small><h2>{tr("Edit member", "멤버 수정")}</h2></div><button onClick={() => setEditMember(null)} aria-label="Close">×</button></header><form onSubmit={saveMemberEdits}><label>{tr("Name", "이름")}<input name="name" required autoFocus defaultValue={editMember.name} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required defaultValue={editMember.email} /></label><div className="form-row"><label>{tr("Primary discipline", "주요 분야")}<select name="discipline" required defaultValue={editMember.discipline}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editMember.status}><option>Active</option><option>Invited</option></select></label></div><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role" defaultValue={editMember.role} disabled={editMember.role === "Owner"}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select>{editMember.role === "Owner" && <input type="hidden" name="role" value="Owner" />}</label><footer className="member-edit-footer">{editMember.role !== "Owner" ? <button className="danger-button" type="button" onClick={() => void removeMember(editMember)}>{tr("Remove member", "멤버 삭제")}</button> : <span />}<div><button type="button" onClick={() => setEditMember(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save member", "멤버 저장")}</button></div></footer></form></section></div>}
 
     {selected && !editCardOpen && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="modal detail-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={selected.title}><div className={`detail-banner ${selected.color}`}><span>{selected.tag}</span><b className={`priority-detail ${priorityTone(selected.priority)}`}>P{selected.priority}</b><b>{selected.points}</b></div><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close">×</button><div className="detail-content"><div className="detail-title-row"><div><small>{selected.project.toUpperCase()}</small><h2>{selected.title}</h2></div><button className="edit-card-button" onClick={() => openCardEditor(selected)}>✎ {tr("Edit card", "카드 수정")}</button></div><p>{selected.description}</p><div className="detail-grid"><div><small>{tr("OWNER", "담당자")}</small><b><span className="avatar">{selected.owner}</span> {selectedOwner?.name ?? tr("Unassigned", "담당자 없음")}</b></div><div><small>{tr("DUE", "마감")}</small><b>◷ {selected.due}</b></div><div><small>{tr("PRIORITY", "우선순위")}</small><b className={`priority-text ${priorityTone(selected.priority)}`}>P{selected.priority}</b></div></div><label>{tr("Status", "상태")}<select value={selected.status} onChange={e => updateStatus(selected, e.target.value as Status)}>{productionStages.map(s => <option value={s} key={s}>{statusLabel(s)}</option>)}</select></label><div className="subtodo-section"><header><div><small>{tr("SUB-TASKS", "하위 작업")}</small><b>{completedSubTodos}/{selectedTodos.length}</b></div>{selectedTodos.length > 0 && <div className="subtodo-progress"><span style={{width:`${Math.round((completedSubTodos / selectedTodos.length) * 100)}%`}} /></div>}</header><div className="subtodo-list">{selectedTodos.map(todo => <div className={`subtodo-row ${todo.done ? "done" : ""}`} key={todo.id}><button className="subtodo-check" onClick={() => toggleSubTodo(selected.id, todo.id)} aria-label={todo.done ? tr("Mark incomplete", "미완료로 표시") : tr("Mark complete", "완료로 표시")}>{todo.done ? "✓" : ""}</button><span>{todo.text}</span><button className="subtodo-remove" onClick={() => removeSubTodo(selected.id, todo.id)} aria-label={tr("Remove sub-task", "하위 작업 삭제")}>×</button></div>)}{selectedTodos.length === 0 && <p className="subtodo-empty">{tr("No sub-tasks yet. Break this card into smaller steps.", "아직 하위 작업이 없습니다. 카드를 더 작은 단계로 나눠보세요.")}</p>}</div><form className="subtodo-form" onSubmit={addSubTodo}><input name="subTodo" placeholder={tr("Add a sub-task…", "하위 작업 추가…")} aria-label={tr("New sub-task", "새 하위 작업")} /><button type="submit">＋ {tr("Add", "추가")}</button></form></div></div></section></div>}
+    {selected && !editCardOpen && <button className={`hero-panel-toggle ${hasHeroMarker(selectedRawTodos) ? "active" : ""}`} onClick={() => setHeroPanelOpen(open => !open)} aria-expanded={heroPanelOpen}>★ {hasHeroMarker(selectedRawTodos) ? tr("Hero journey", "Hero 여정") : tr("Hero & sub-cards", "Hero 및 하위 카드")}</button>}
+    {selected && !editCardOpen && heroPanelOpen && <aside className="hero-card-panel" aria-label={tr("Hero card and sub-cards", "Hero 카드 및 하위 카드")}><header><div><small>{tr("HERO JOURNEY", "HERO 여정")}</small><h3>{selected.title}</h3></div><button onClick={() => setHeroPanelOpen(false)} aria-label={tr("Close Hero panel", "Hero 패널 닫기")}>×</button></header>{selectedHeroParent && <button className="hero-parent-link" onClick={() => setSelected(selectedHeroParent)}><span>↰</span><div><small>{tr("PART OF HERO", "상위 HERO")}</small><b>{selectedHeroParent.title}</b></div></button>}{!hasHeroMarker(selectedRawTodos) ? <section className="hero-promotion"><span>★</span><h4>{tr("Turn this into a Hero Card", "이 카드를 Hero 카드로 전환")}</h4><p>{tr("Bundle related production cards and track their combined progress from one place.", "관련 프로덕션 카드를 묶고 한곳에서 전체 진행률을 확인하세요.")}</p><button className="create-button" onClick={promoteSelectedToHero}>★ {tr("Make Hero Card", "Hero 카드 만들기")}</button></section> : <><section className="hero-progress-card"><div><span>★</span><div><small>{tr("HERO PROGRESS", "HERO 진행률")}</small><b>{selectedHeroCompleted} / {selectedHeroChildren.length} {tr("cards done", "개 카드 완료")}</b></div></div><strong>{selectedHeroChildren.length ? Math.round(selectedHeroCompleted / selectedHeroChildren.length * 100) : 0}%</strong><div><i style={{width:`${selectedHeroChildren.length ? selectedHeroCompleted / selectedHeroChildren.length * 100 : 0}%`}} /></div><footer><span>◆ {selectedHeroChildren.reduce((sum, card) => sum + card.points, 0)} {tr("total effort", "총 작업량")}</span><span>{selectedHeroChildren.filter(card => card.status === "In progress" || card.status === "Review").length} {tr("active", "진행 중")}</span></footer></section><section className="hero-child-section"><header><div><small>{tr("SUB-CARDS", "하위 카드")}</small><b>{selectedHeroChildren.length}</b></div></header><div className="hero-child-list">{selectedHeroChildren.map(child => <article key={child.id}><button onClick={() => setSelected(child)}><span className={`hero-child-status status-${child.status.toLowerCase().replace(" ", "-")}`}/><div><b>{child.title}</b><small><span className="avatar">{child.owner}</span> P{child.priority} · ◆ {child.points} · {statusLabel(child.status)}</small></div></button><button className="hero-unlink" onClick={() => unlinkHeroChild(selected.id, child.id)} aria-label={tr(`Unlink ${child.title}`, `${child.title} 연결 해제`)}>×</button></article>)}{selectedHeroChildren.length === 0 && <p>{tr("No sub-cards yet. Create one or start a Journey below.", "아직 하위 카드가 없습니다. 새로 만들거나 아래에서 여정을 시작하세요.")}</p>}</div><form className="hero-quick-create" onSubmit={createHeroChild}><input value={heroChildTitle} onChange={event => setHeroChildTitle(event.target.value)} placeholder={tr("New sub-card title…", "새 하위 카드 제목…")} /><button type="submit" disabled={!heroChildTitle.trim()}>＋ {tr("Create", "만들기")}</button></form>{heroCandidateCards.length > 0 && <form className="hero-link-existing" onSubmit={linkExistingHeroChild}><select name="heroChildId" defaultValue=""><option value="" disabled>{tr("Link an existing card…", "기존 카드 연결…")}</option>{heroCandidateCards.map(card => <option value={card.id} key={card.id}>{card.title} · {statusLabel(card.status)}</option>)}</select><button type="submit">↳ {tr("Link", "연결")}</button></form>}</section><section className="journey-templates"><header><small>{tr("JOURNEY TEMPLATES", "여정 템플릿")}</small><b>{tr("Create a full production sequence", "전체 제작 단계를 한 번에 생성")}</b></header>{journeyTemplates.map(template => <button onClick={() => startHeroJourney(template)} key={template.id}><span>✦</span><div><b>{tr(template.name, template.nameKo)}</b><small>{tr(template.steps.join(" → "), template.stepsKo.join(" → "))}</small></div><i>＋{template.steps.length}</i></button>)}</section></>}</aside>}
     {selected && editCardOpen && <div className="modal-backdrop" onMouseDown={() => setEditCardOpen(false)}><section className="modal create-modal edit-card-modal card-form-modal card-planner-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit card", "카드 수정")}><header className="card-planner-header"><span className={`card-planner-icon ${selected.color}`}>✎</span><div><small>{tr("CARD DETAILS", "카드 정보")}</small><h2>{tr("Edit production card", "프로덕션 카드 수정")}</h2><p>{selected.project} · {statusLabel(selected.status)}</p></div><button onClick={() => setEditCardOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveCardEdits}>
       <section className="card-form-section card-form-essentials"><div className="card-form-section-title"><span>1</span><div><b>{tr("The work", "작업 내용")}</b><small>{tr("Keep the outcome clear and actionable.", "명확하고 실행 가능한 작업으로 정리하세요.")}</small></div></div><label>{tr("Card title", "카드 제목")}<input name="title" required autoFocus defaultValue={selected.title} /></label><label>{tr("Description", "설명")}<textarea name="description" defaultValue={selected.description} /></label></section>
       <div className="card-form-columns"><section className="card-form-section"><div className="card-form-section-title"><span>2</span><div><b>{tr("Assignment", "배정")}</b><small>{tr("Move the card to the right team.", "알맞은 팀과 담당자에게 이동하세요.")}</small></div></div><label className="discipline-field">{tr("Production discipline", "프로덕션 분야")}<span><select name="tag" defaultValue={selected.tag}>{productionDisciplines.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select><button type="button" onClick={() => setDisciplineManagerOpen(true)}>⚙ {tr("Manage", "관리")}</button></span></label><div className="card-form-pair"><label>{tr("Project", "프로젝트")}<select name="project" defaultValue={selected.project}>{activeProjects.map(projectItem => <option key={projectItem.id} value={projectItem.name}>{projectItem.name}</option>)}</select></label><label>{tr("Column", "열")}<select name="status" defaultValue={selected.status}>{productionStages.map(status => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label></div><label>{tr("Owner", "담당자")}<select value={editOwner} onChange={event => setEditOwner(event.target.value)}>{!activeCardOwners.some(member => member.initials === editOwner) && <option value={editOwner}>{editOwner} · {tr("Unavailable member", "사용할 수 없는 멤버")}</option>}{activeCardOwners.map(member => <option value={member.initials} key={member.id}>{member.name} · {member.discipline}</option>)}</select></label></section>
