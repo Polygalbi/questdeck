@@ -1,6 +1,6 @@
 "use client";
 
-import { DragEvent, FormEvent, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { DragEvent, FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
@@ -18,6 +18,7 @@ type Project = { id: string; name: string; count: number; color: string; owner: 
 type SubTodo = { id: number; text: string; done: boolean };
 type ProductionDiscipline = { id: number; name: string; color: string };
 type WorkspaceDocument = { id: number; title: string; content: string; createdByEmail: string; ownerName: string; isPublished: boolean; shareSlug: string; createdAt: string; updatedAt: string };
+type DocumentComment = { id: number; documentId: number; userId: string; authorEmail: string; authorName: string; body: string; createdAt: string };
 type Milestone = { id: number; title: string; milestoneDate: string; progress: number; completedCards: number; totalCards: number; note: string; color: "violet" | "mint" | "coral"; stage: string };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
@@ -54,6 +55,24 @@ async function syncQuestdeck<T = { ok: boolean }>(action: string, payload: Recor
   if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : "Supabase sync failed");
   return data as T;
 }
+
+const richTextTags = new Set(["p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "a", "table", "thead", "tbody", "tr", "th", "td", "hr"]);
+function escapeHtml(value: string) { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;"); }
+function sanitizeRichText(value: string) {
+  if (!/<[a-z][\s\S]*>/i.test(value)) return `<p>${escapeHtml(value).replace(/\n/g, "<br>")}</p>`;
+  return value.replace(/<!--[\s\S]*?-->/g, "").replace(/<\s*(\/?)\s*([a-z0-9]+)([^>]*)>/gi, (_match, closing: string, rawTag: string, attributes: string) => {
+    const tag = rawTag.toLowerCase();
+    if (!richTextTags.has(tag)) return "";
+    if (closing) return tag === "br" || tag === "hr" ? "" : `</${tag}>`;
+    if (tag === "a") {
+      const href = attributes.match(/href\s*=\s*[\"']([^\"']+)[\"']/i)?.[1] ?? "";
+      const safeHref = /^(https?:|mailto:)/i.test(href) ? escapeHtml(href) : "";
+      return safeHref ? `<a href="${safeHref}" target="_blank" rel="noopener noreferrer">` : "<a>";
+    }
+    return tag === "br" || tag === "hr" ? `<${tag}>` : `<${tag}>`;
+  });
+}
+function richTextExcerpt(value: string) { return value.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim(); }
 
 const initialCards: Card[] = [
   { id: 1, title: "Tune player movement", description: "Make traversal feel crisp and responsive before the next playtest.", tag: "Gameplay", owner: "MK", points: 3, priority: 9, color: "violet", status: "In progress", project: "Project Nightfall", due: "Today", dueDate: "2026-08-18" },
@@ -203,6 +222,14 @@ export default function Home() {
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([]);
   const [documentEditorOpen, setDocumentEditorOpen] = useState(false);
   const [editingDocument, setEditingDocument] = useState<WorkspaceDocument | null>(null);
+  const [documentDraftTitle, setDocumentDraftTitle] = useState("");
+  const [documentDraftContent, setDocumentDraftContent] = useState("");
+  const [documentDirty, setDocumentDirty] = useState(false);
+  const [documentSaveState, setDocumentSaveState] = useState<"saved" | "saving" | "unsaved">("saved");
+  const [documentComments, setDocumentComments] = useState<DocumentComment[]>([]);
+  const [documentCommentsOpen, setDocumentCommentsOpen] = useState(true);
+  const documentEditorRef = useRef<HTMLDivElement | null>(null);
+  const documentSaveRequest = useRef(0);
   const [milestones, setMilestones] = useState<Milestone[]>(initialMilestones);
   const [milestoneEditorOpen, setMilestoneEditorOpen] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
@@ -342,6 +369,11 @@ export default function Home() {
       .then(data => setDocuments(data.documents.map(item => ({ id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at }))))
       .catch(error => setToast(error instanceof Error ? error.message : tr("Could not load documents", "문서를 불러오지 못했습니다")));
   }, [session?.access_token]);
+  useEffect(() => {
+    if (!documentEditorOpen || !editingDocument || !documentDirty) return;
+    const timer = window.setTimeout(() => void saveDocumentDraft(false), 1100);
+    return () => window.clearTimeout(timer);
+  }, [documentEditorOpen, editingDocument?.id, documentDraftTitle, documentDraftContent, documentDirty]);
   useEffect(() => {
     const shareSlug = new URLSearchParams(window.location.search).get("document");
     if (!shareSlug || !/^[0-9a-f-]{36}$/i.test(shareSlug)) return;
@@ -1002,18 +1034,105 @@ export default function Home() {
     return { id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at };
   }
 
-  async function saveDocument(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function mapDocumentComment(item: { id: number; document_id: number; user_id: string; author_email: string; author_name: string; body: string; created_at: string }): DocumentComment {
+    return { id: item.id, documentId: item.document_id, userId: item.user_id, authorEmail: item.author_email, authorName: item.author_name, body: item.body, createdAt: item.created_at };
+  }
+
+  async function loadDocumentComments(documentId: number) {
+    const { data, error } = await supabase.from("questdeck_document_comments").select("id,document_id,user_id,author_email,author_name,body,created_at").eq("document_id", documentId).order("created_at", { ascending: true });
+    if (error) { setDocumentComments([]); return; }
+    setDocumentComments((data ?? []).map(mapDocumentComment));
+  }
+
+  function openDocumentEditor(document: WorkspaceDocument) {
+    setEditingDocument(document);
+    setDocumentDraftTitle(document.title);
+    setDocumentDraftContent(sanitizeRichText(document.content));
+    setDocumentDirty(false);
+    setDocumentSaveState("saved");
+    setDocumentCommentsOpen(true);
+    setDocumentEditorOpen(true);
+    void loadDocumentComments(document.id);
+  }
+
+  async function createBlankDocument() {
     const accessToken = requireSession();
     if (!accessToken) return;
-    const data = new FormData(event.currentTarget);
-    const document = { ...editingDocument, title: String(data.get("title") ?? "").trim(), content: String(data.get("content") ?? ""), createdByEmail: editingDocument?.createdByEmail ?? accountEmail ?? "", ownerName: editingDocument?.ownerName ?? accountName, isPublished: editingDocument?.isPublished ?? false };
     try {
-      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>(editingDocument ? "update_document" : "create_document", { document }, accessToken);
+      const document = { title: tr("Untitled document", "제목 없는 문서"), content: "<p><br></p>", createdByEmail: accountEmail ?? "", ownerName: accountName, isPublished: false };
+      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>("create_document", { document }, accessToken);
       const saved = mapDocument(result.document);
-      setDocuments(current => editingDocument ? current.map(item => item.id === saved.id ? saved : item) : [saved, ...current]);
-      setDocumentEditorOpen(false); setEditingDocument(null); setToast(tr("Document saved", "문서를 저장했습니다"));
-    } catch (error) { setToast(error instanceof Error ? error.message : tr("Could not save document", "문서를 저장하지 못했습니다")); }
+      setDocuments(current => [saved, ...current]);
+      openDocumentEditor(saved);
+    } catch (error) { setToast(error instanceof Error ? error.message : tr("Could not create document", "문서를 만들지 못했습니다")); }
+  }
+
+  async function saveDocumentDraft(closeAfter = false) {
+    const accessToken = requireSession();
+    if (!accessToken || !editingDocument) return;
+    const request = ++documentSaveRequest.current;
+    const document = { ...editingDocument, title: documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"), content: sanitizeRichText(documentDraftContent) };
+    setDocumentSaveState("saving");
+    try {
+      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>("update_document", { document }, accessToken);
+      if (request !== documentSaveRequest.current) return;
+      const saved = mapDocument(result.document);
+      setDocuments(current => current.map(item => item.id === saved.id ? saved : item));
+      setEditingDocument(saved);
+      setDocumentDirty(false);
+      setDocumentSaveState("saved");
+      if (closeAfter) { setDocumentEditorOpen(false); setEditingDocument(null); setDocumentComments([]); setToast(tr("Document saved", "문서를 저장했습니다")); }
+    } catch (error) {
+      if (request === documentSaveRequest.current) setDocumentSaveState("unsaved");
+      setToast(error instanceof Error ? error.message : tr("Could not save document", "문서를 저장하지 못했습니다"));
+    }
+  }
+
+  function saveDocument(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void saveDocumentDraft(true);
+  }
+
+  function updateDocumentContent() {
+    const content = documentEditorRef.current?.innerHTML ?? "";
+    setDocumentDraftContent(content);
+    setDocumentDirty(true);
+    setDocumentSaveState("unsaved");
+  }
+
+  function formatDocument(command: string, value?: string) {
+    documentEditorRef.current?.focus();
+    document.execCommand(command, false, value);
+    updateDocumentContent();
+  }
+
+  function addDocumentLink() {
+    const url = window.prompt(tr("Paste a web address", "웹 주소를 붙여넣으세요"), "https://");
+    if (!url || !/^https?:\/\//i.test(url)) return;
+    formatDocument("createLink", url);
+  }
+
+  function insertDocumentTable() {
+    formatDocument("insertHTML", "<table><tbody><tr><th>Heading</th><th>Heading</th></tr><tr><td>Cell</td><td>Cell</td></tr></tbody></table><p><br></p>");
+  }
+
+  async function addDocumentComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingDocument || !session) return;
+    const form = event.currentTarget;
+    const body = String(new FormData(form).get("comment") ?? "").trim();
+    if (!body) return;
+    const { data, error } = await supabase.from("questdeck_document_comments").insert({ document_id: editingDocument.id, user_id: session.user.id, author_email: accountEmail ?? "", author_name: accountName, body }).select("id,document_id,user_id,author_email,author_name,body,created_at").single();
+    if (error || !data) { setToast(error?.message ?? tr("Could not add comment", "댓글을 추가하지 못했습니다")); return; }
+    setDocumentComments(current => [...current, mapDocumentComment(data)]);
+    form.reset();
+  }
+
+  async function deleteDocumentComment(comment: DocumentComment) {
+    if (!session || comment.userId !== session.user.id) return;
+    const { error } = await supabase.from("questdeck_document_comments").delete().eq("id", comment.id);
+    if (error) { setToast(error.message); return; }
+    setDocumentComments(current => current.filter(item => item.id !== comment.id));
   }
 
   async function setDocumentPublished(document: WorkspaceDocument, isPublished: boolean, copyLink = false) {
@@ -1023,6 +1142,7 @@ export default function Home() {
       const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>("update_document", { document: { ...document, isPublished } }, accessToken);
       const saved = mapDocument(result.document);
       setDocuments(current => current.map(item => item.id === saved.id ? saved : item));
+      setEditingDocument(current => current?.id === saved.id ? saved : current);
       if (copyLink && isPublished) { await navigator.clipboard.writeText(`${window.location.origin}/?document=${saved.shareSlug}`); setToast(tr("Share link copied", "공유 링크를 복사했습니다")); }
       else setToast(isPublished ? tr("Document published", "문서를 공개했습니다") : tr("Document is private again", "문서를 다시 비공개로 전환했습니다"));
     } catch (error) { setToast(error instanceof Error ? error.message : tr("Could not update sharing", "공유 설정을 변경하지 못했습니다")); }
@@ -1235,7 +1355,7 @@ export default function Home() {
   }
 
   if (publicDocumentLoading) return <main className="shared-document-page"><section className="shared-document"><span className="brand-mark">Q</span><p>{tr("Loading shared document…", "공유 문서를 불러오는 중…")}</p></section></main>;
-  if (publicDocument) return <main className="shared-document-page"><article className="shared-document"><header><button className="shared-brand" onClick={() => { window.history.replaceState({}, "", "/"); setPublicDocument(null); }}><span className="brand-mark">Q</span><b>Questdeck</b></button><span>{tr("Shared document", "공유 문서")}</span></header><small>{tr("DOCUMENT", "문서")}</small><h1>{publicDocument.title}</h1><div className="shared-document-meta">{tr("By", "작성자")} {publicDocument.ownerName || publicDocument.createdByEmail} · {new Date(publicDocument.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")}</div><div className="shared-document-body">{publicDocument.content.split("\n").map((line, index) => line ? <p key={index}>{line}</p> : <br key={index}/>)}</div></article></main>;
+  if (publicDocument) return <main className="shared-document-page"><article className="shared-document"><header><button className="shared-brand" onClick={() => { window.history.replaceState({}, "", "/"); setPublicDocument(null); }}><span className="brand-mark">Q</span><b>Questdeck</b></button><span>{tr("Shared document", "공유 문서")}</span></header><small>{tr("DOCUMENT", "문서")}</small><h1>{publicDocument.title}</h1><div className="shared-document-meta">{tr("By", "작성자")} {publicDocument.ownerName || publicDocument.createdByEmail} · {new Date(publicDocument.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")}</div><div className="shared-document-body rich-document-content" dangerouslySetInnerHTML={{ __html: sanitizeRichText(publicDocument.content) }} /></article></main>;
 
   return <main className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
@@ -1361,7 +1481,7 @@ export default function Home() {
         {timelineHover && (() => { const card = cards.find(item => item.id === timelineHover.cardId); if (!card) return null; const todos = subTodos[card.id] ?? []; const completed = todos.filter(todo => todo.done).length; const start = card.startDate ? timelineDateLabel(new Date(`${card.startDate}T12:00:00`)) : card.due; return <aside className="timeline-floating-tooltip" role="tooltip" style={{left:timelineHover.left,top:timelineHover.top}}><b>{card.title}</b><p>{card.description}</p><div><strong>{card.project}</strong><strong>{statusLabel(card.status)}</strong></div><div><strong>◉ {card.owner}</strong><strong>↔ {start} → {card.due}</strong><strong>◆ {card.points}</strong></div>{todos.length > 0 && <footer><b>{tr("Sub-tasks", "하위 작업")} {completed}/{todos.length}</b><span>{todos.slice(0,2).map(todo => `${todo.done ? "✓" : "○"} ${todo.text}`).join(" · ")}</span></footer>}</aside> })()}
       </div>}
 
-      {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Write studio notes, publish them, and share a read-only link.", "스튜디오 문서를 작성하고 공개하여 읽기 전용 링크로 공유하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => { if (!session) { setAuthOpen(true); return; } setEditingDocument(null); setDocumentEditorOpen(true); }}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{documents.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{document.content.trim().slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => { setEditingDocument(document); setDocumentEditorOpen(true); }}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{documents.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
+      {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Create rich team documents with autosave, discussion, and shareable links.", "자동 저장, 토론, 공유 링크를 지원하는 팀 문서를 만드세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void createBlankDocument()}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{documents.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{richTextExcerpt(document.content).slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => openDocumentEditor(document)}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{documents.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
 
       {view === "milestones" && <div className="content milestones-content">
         <div className="page-title"><div><p>{tr("ROADMAP", "로드맵")}</p><h1>{tr("Milestones", "마일스톤")}</h1><h2>{tr("Create delivery targets, track progress, and keep the whole studio aligned.", "출시 목표를 만들고 진행 상황을 추적하여 스튜디오 전체의 방향을 맞추세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => openMilestoneEditor()}>＋ {tr("New milestone", "새 마일스톤")}</button></div>
@@ -1422,7 +1542,7 @@ export default function Home() {
     {disciplineManagerOpen && <div className="modal-backdrop discipline-manager-backdrop" onMouseDown={() => setDisciplineManagerOpen(false)}><section className="modal create-modal production-discipline-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Manage production disciplines", "프로덕션 분야 관리")}><header><div><small>{tr("CARD SETTINGS", "카드 설정")}</small><h2>{tr("Production disciplines", "프로덕션 분야")}</h2></div><button onClick={() => setDisciplineManagerOpen(false)} aria-label="Close">×</button></header><form className="production-discipline-add" onSubmit={addProductionDiscipline}><input value={newProductionDiscipline} onChange={event => setNewProductionDiscipline(event.target.value)} placeholder={tr("New discipline", "새 분야")}/><button className="create-button" type="submit">＋ {tr("Add", "추가")}</button></form><div className="production-discipline-list">{productionDisciplines.map(item => editingProductionDiscipline?.id === item.id ? <form key={item.id} onSubmit={renameProductionDiscipline}><input name="name" defaultValue={item.name} autoFocus/><button type="submit">{tr("Save", "저장")}</button><button type="button" onClick={() => setEditingProductionDiscipline(null)}>×</button></form> : <article key={item.id}><i className={item.color}/><b>{item.name}</b><small>{cards.filter(card => card.tag === item.name).length} {tr("cards", "개 카드")}</small><button type="button" disabled={item.name === "General"} onClick={() => setEditingProductionDiscipline(item)}>✎</button><button type="button" className="danger-button" disabled={item.name === "General"} onClick={() => void deleteProductionDiscipline(item)}>×</button></article>)}</div><p className="form-help">{tr("Renaming updates every card. Deleting moves cards to General.", "이름 변경은 모든 카드에 반영됩니다. 삭제한 분야의 카드는 General로 이동합니다.")}</p></section></div>}
     {nameEditorOpen && session && <div className="modal-backdrop" onMouseDown={() => setNameEditorOpen(false)}><section className="modal create-modal name-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit name", "이름 수정")}><header><div><small>{tr("PROFILE", "프로필")}</small><h2>{tr("Edit your name", "이름 수정")}</h2></div><button onClick={() => setNameEditorOpen(false)} aria-label="Close">×</button></header><form onSubmit={saveAccountName}><label>{tr("Display name", "표시 이름")}<input name="displayName" required autoFocus maxLength={80} defaultValue={accountName} placeholder={tr("Your name", "이름")}/></label><p className="form-help">{tr("This name appears in your greeting, account page, and profile menu.", "이 이름은 인사말, 계정 페이지, 프로필 메뉴에 표시됩니다.")}</p><footer><button type="button" onClick={() => setNameEditorOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save name", "이름 저장")}</button></footer></form></section></div>}
     {authOpen && <div className="modal-backdrop" onMouseDown={() => setAuthOpen(false)}><section className="modal create-modal auth-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Questdeck account", "Questdeck 계정")}><header><div><small>QUESTDECK ACCOUNT</small><h2>{authMode === "signin" ? tr("Welcome back", "다시 오신 것을 환영합니다") : tr("Create your account", "계정 만들기")}</h2></div><button onClick={() => setAuthOpen(false)} aria-label="Close">×</button></header><button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button><div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div><form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<footer className="auth-footer"><button type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Create account", "계정 만들기") : tr("I already have an account", "이미 계정이 있어요")}</button><button className="create-button" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Sign up", "가입하기")}</button></footer></form></section></div>}
-    {documentEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setDocumentEditorOpen(false); setEditingDocument(null); }}><section className="modal create-modal document-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Document editor", "문서 편집기")}><header><div><small>{tr("WORKSPACE DOCUMENT", "워크스페이스 문서")}</small><h2>{editingDocument ? tr("Edit document", "문서 수정") : tr("New document", "새 문서")}</h2></div><button onClick={() => { setDocumentEditorOpen(false); setEditingDocument(null); }} aria-label="Close">×</button></header><form onSubmit={saveDocument}><label>{tr("Title", "제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingDocument?.title ?? ""} placeholder={tr("Document title", "문서 제목")}/></label><label>{tr("Content", "내용")}<textarea className="document-editor" name="content" defaultValue={editingDocument?.content ?? ""} placeholder={tr("Write notes, decisions, links, or a production brief…", "메모, 결정 사항, 링크 또는 프로덕션 브리프를 작성하세요…")}/></label>{editingDocument?.isPublished && <div className="published-note"><b>{tr("This document is published", "이 문서는 공개되어 있습니다")}</b><p>{tr("Saving changes updates the shared link immediately.", "저장한 변경 사항은 공유 링크에 즉시 반영됩니다.")}</p></div>}<footer><button type="button" onClick={() => { setDocumentEditorOpen(false); setEditingDocument(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save document", "문서 저장")}</button></footer></form></section></div>}
+    {documentEditorOpen && editingDocument && <div className="document-studio" role="dialog" aria-modal="true" aria-label={tr("Document editor", "문서 편집기")}><header className="document-studio-topbar"><button className="document-back" onClick={() => void saveDocumentDraft(true)} aria-label={tr("Back to documents", "문서 목록으로 돌아가기")}>←</button><span className="brand-mark">Q</span><div><input value={documentDraftTitle} maxLength={200} onChange={event => { setDocumentDraftTitle(event.target.value); setDocumentDirty(true); setDocumentSaveState("unsaved"); }} aria-label={tr("Document title", "문서 제목")} /><small className={documentSaveState}>{documentSaveState === "saving" ? tr("Saving…", "저장 중…") : documentSaveState === "unsaved" ? tr("Unsaved changes", "저장되지 않은 변경") : `✓ ${tr("Saved to workspace", "워크스페이스에 저장됨")}`}</small></div><button className={`document-publish-state ${editingDocument.isPublished ? "published" : ""}`} onClick={() => void setDocumentPublished({ ...editingDocument, title: documentDraftTitle.trim() || tr("Untitled document", "제목 없는 문서"), content: sanitizeRichText(documentDraftContent) }, !editingDocument.isPublished)}>{editingDocument.isPublished ? `● ${tr("Published", "공개됨")}` : `○ ${tr("Private", "비공개")}`}</button><button className={`document-comment-toggle ${documentCommentsOpen ? "active" : ""}`} onClick={() => setDocumentCommentsOpen(open => !open)}>◌ {documentComments.length}</button><button className="create-button document-done" onClick={() => void saveDocumentDraft(true)}>✓ {tr("Done", "완료")}</button></header><div className="document-studio-toolbar" role="toolbar" aria-label={tr("Document formatting", "문서 서식")}><select defaultValue="p" onChange={event => formatDocument("formatBlock", event.target.value)} aria-label={tr("Text style", "텍스트 스타일")}><option value="p">{tr("Normal text", "본문")}</option><option value="h1">{tr("Heading 1", "제목 1")}</option><option value="h2">{tr("Heading 2", "제목 2")}</option><option value="h3">{tr("Heading 3", "제목 3")}</option><option value="blockquote">{tr("Quote", "인용")}</option></select><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("bold")} aria-label={tr("Bold", "굵게")}><b>B</b></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("italic")} aria-label={tr("Italic", "기울임")}><i>I</i></button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("underline")} aria-label={tr("Underline", "밑줄")}><u>U</u></button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertUnorderedList")} aria-label={tr("Bullet list", "글머리 기호")}>• ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("insertOrderedList")} aria-label={tr("Numbered list", "번호 목록")}>1. ≡</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={addDocumentLink} aria-label={tr("Add link", "링크 추가")}>↗</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={insertDocumentTable} aria-label={tr("Insert table", "표 삽입")}>▦</button><span/><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("undo")} aria-label={tr("Undo", "실행 취소")}>↶</button><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => formatDocument("redo")} aria-label={tr("Redo", "다시 실행")}>↷</button></div><main className={`document-studio-main ${documentCommentsOpen ? "with-comments" : ""}`}><section className="document-canvas-wrap"><form className="document-canvas" onSubmit={saveDocument}><div ref={documentEditorRef} className="document-rich-editor rich-document-content" contentEditable suppressContentEditableWarning data-placeholder={tr("Start writing your document…", "문서 작성을 시작하세요…")} onInput={updateDocumentContent} dangerouslySetInnerHTML={{ __html: documentDraftContent }} /><footer><span>{richTextExcerpt(documentDraftContent).split(/\s+/).filter(Boolean).length} {tr("words", "단어")}</span><button type="submit">{tr("Save now", "지금 저장")}</button></footer></form></section>{documentCommentsOpen && <aside className="document-comments"><header><div><small>{tr("DISCUSSION", "토론")}</small><h3>{tr("Document comments", "문서 댓글")}</h3></div><button onClick={() => setDocumentCommentsOpen(false)}>×</button></header><div className="document-comment-list">{documentComments.map(comment => <article key={comment.id}><span>{comment.authorName.split(/\s+/).map(part => part[0]).join("").slice(0,2).toUpperCase()}</span><div><header><b>{comment.authorName || comment.authorEmail}</b><small>{new Date(comment.createdAt).toLocaleString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" })}</small></header><p>{comment.body}</p></div>{comment.userId === session?.user.id && <button onClick={() => void deleteDocumentComment(comment)} aria-label={tr("Delete comment", "댓글 삭제")}>×</button>}</article>)}{documentComments.length === 0 && <div className="document-comments-empty"><span>◌</span><b>{tr("No comments yet", "아직 댓글이 없습니다")}</b><p>{tr("Start a discussion about this document.", "이 문서에 대한 토론을 시작하세요.")}</p></div>}</div><form onSubmit={addDocumentComment}><textarea name="comment" maxLength={1200} required placeholder={tr("Add a comment…", "댓글 추가…")} /><button className="create-button" type="submit">＋ {tr("Comment", "댓글")}</button></form></aside>}</main></div>}
     {toast && <div className="toast">✓ {toast}</div>}
   </main>;
 }
