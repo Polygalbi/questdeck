@@ -18,6 +18,7 @@ type Project = { id: string; name: string; count: number; color: string; owner: 
 type SubTodo = { id: number; text: string; done: boolean };
 type ProductionDiscipline = { id: number; name: string; color: string };
 type WorkspaceDocument = { id: number; title: string; content: string; createdByEmail: string; ownerName: string; isPublished: boolean; shareSlug: string; createdAt: string; updatedAt: string };
+type Milestone = { id: number; title: string; milestoneDate: string; progress: number; completedCards: number; totalCards: number; note: string; color: "violet" | "mint" | "coral"; stage: string };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -40,6 +41,7 @@ type SupabaseCard = {
 };
 
 type SupabaseSubTodo = { id: number; card_id: number; text: string; done: boolean; sort_order: number };
+type SupabaseMilestone = { id: number; title: string; milestone_date: string; progress: number; completed_cards: number; total_cards: number; note: string; color: Milestone["color"]; stage: string };
 
 async function syncQuestdeck<T = { ok: boolean }>(action: string, payload: Record<string, unknown>, accessToken: string): Promise<T> {
   const response = await fetch("/api/questdeck-sync", {
@@ -67,6 +69,12 @@ const initialProjects: Project[] = [
   { id: "nightfall", name: "Project Nightfall", count: 24, color: "purple", owner: "Mina Kwon", status: "Active", progress: 68, updated: "12 minutes ago" },
   { id: "marketing", name: "Marketing", count: 8, color: "yellow", owner: "Jamie Kim", status: "Active", progress: 44, updated: "2 hours ago" },
   { id: "studio-ops", name: "Studio Ops", count: 4, color: "blue", owner: "Alex Santos", status: "On hold", progress: 25, updated: "Yesterday" },
+];
+
+const initialMilestones: Milestone[] = [
+  { id: 1, title: "Festival demo", milestoneDate: "2026-08-30", progress: 68, completedCards: 34, totalCards: 50, note: "Playable demo for the Autumn Game Showcase", color: "violet", stage: "UP NEXT" },
+  { id: 2, title: "Content complete", milestoneDate: "2026-09-27", progress: 41, completedCards: 28, totalCards: 68, note: "All chapters and production assets locked", color: "mint", stage: "PRODUCTION" },
+  { id: 3, title: "Gold candidate", milestoneDate: "2026-11-14", progress: 18, completedCards: 12, totalCards: 66, note: "Release-ready build for platform certification", color: "coral", stage: "RELEASE" },
 ];
 
 const productionStages: Status[] = ["Ready", "In progress", "Review", "Done"];
@@ -194,6 +202,9 @@ export default function Home() {
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([]);
   const [documentEditorOpen, setDocumentEditorOpen] = useState(false);
   const [editingDocument, setEditingDocument] = useState<WorkspaceDocument | null>(null);
+  const [milestones, setMilestones] = useState<Milestone[]>(initialMilestones);
+  const [milestoneEditorOpen, setMilestoneEditorOpen] = useState(false);
+  const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
   const [publicDocument, setPublicDocument] = useState<WorkspaceDocument | null>(null);
   const [publicDocumentLoading, setPublicDocumentLoading] = useState(false);
   const [productionDisciplines, setProductionDisciplines] = useState(initialProductionDisciplines);
@@ -262,8 +273,12 @@ export default function Home() {
         if (!response.ok) throw new Error("Supabase sub-task request failed");
         return response.json() as Promise<SupabaseSubTodo[]>;
       }),
+      fetch(`${SUPABASE_URL}/rest/v1/questdeck_milestones?select=id,title,milestone_date,progress,completed_cards,total_cards,note,color,stage&order=milestone_date.asc`, { headers }).then(response => {
+        if (!response.ok) throw new Error("Supabase milestone request failed");
+        return response.json() as Promise<SupabaseMilestone[]>;
+      }),
     ])
-      .then(([remoteCards, remoteSubTodos]) => {
+      .then(([remoteCards, remoteSubTodos, remoteMilestones]) => {
         const mapped = remoteCards.map(card => ({
           id: card.id, title: card.title, description: card.description, tag: card.tag, owner: card.owner_initials,
           points: card.points, priority: card.priority ?? 5, color: card.color, status: card.status, project: card.questdeck_projects.name, due: card.due_label || "No date", dueDate: card.due_date, startDate: card.start_date,
@@ -275,6 +290,7 @@ export default function Home() {
           return all;
         }, {});
         setSubTodos(remoteTodos);
+        setMilestones(remoteMilestones.map(item => ({ id: item.id, title: item.title, milestoneDate: item.milestone_date, progress: item.progress, completedCards: item.completed_cards, totalCards: item.total_cards, note: item.note, color: item.color, stage: item.stage })));
         setDataSource("supabase");
       })
       .catch(() => setDataSource("local"));
@@ -971,6 +987,57 @@ export default function Home() {
     catch (error) { setToast(error instanceof Error ? error.message : tr("Could not delete document", "문서를 삭제하지 못했습니다")); }
   }
 
+  function openMilestoneEditor(milestone: Milestone | null = null) {
+    if (!session) { setAuthOpen(true); return; }
+    setEditingMilestone(milestone);
+    setMilestoneEditorOpen(true);
+  }
+
+  async function saveMilestone(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const data = new FormData(event.currentTarget);
+    const totalCards = Math.max(0, Number(data.get("totalCards")) || 0);
+    const completedCards = Math.max(0, Math.min(totalCards, Number(data.get("completedCards")) || 0));
+    const milestone = {
+      ...(editingMilestone ? { id: editingMilestone.id } : {}),
+      title: String(data.get("title")).trim(),
+      milestoneDate: String(data.get("milestoneDate")),
+      progress: Math.max(0, Math.min(100, Number(data.get("progress")) || 0)),
+      completedCards,
+      totalCards,
+      note: String(data.get("note")).trim(),
+      color: String(data.get("color")) as Milestone["color"],
+      stage: String(data.get("stage")).trim().toUpperCase(),
+    };
+    try {
+      const result = await syncQuestdeck<{ milestone: SupabaseMilestone }>(editingMilestone ? "update_milestone" : "create_milestone", { milestone }, accessToken);
+      const saved: Milestone = { id: result.milestone.id, title: result.milestone.title, milestoneDate: result.milestone.milestone_date, progress: result.milestone.progress, completedCards: result.milestone.completed_cards, totalCards: result.milestone.total_cards, note: result.milestone.note, color: result.milestone.color, stage: result.milestone.stage };
+      setMilestones(current => editingMilestone ? current.map(item => item.id === saved.id ? saved : item) : [...current, saved]);
+      setMilestoneEditorOpen(false);
+      setEditingMilestone(null);
+      setToast(editingMilestone ? tr("Milestone updated", "마일스톤을 수정했습니다") : tr("Milestone created", "마일스톤을 만들었습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not save milestone", "마일스톤을 저장하지 못했습니다"));
+    }
+  }
+
+  async function deleteMilestone(milestone: Milestone) {
+    if (!window.confirm(tr(`Permanently delete “${milestone.title}”?`, `“${milestone.title}” 마일스톤을 영구 삭제할까요?`))) return;
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    try {
+      await syncQuestdeck("delete_milestone", { milestoneId: milestone.id }, accessToken);
+      setMilestones(current => current.filter(item => item.id !== milestone.id));
+      setMilestoneEditorOpen(false);
+      setEditingMilestone(null);
+      setToast(tr("Milestone deleted", "마일스톤을 삭제했습니다"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : tr("Could not delete milestone", "마일스톤을 삭제하지 못했습니다"));
+    }
+  }
+
   const accountEmail = session?.user.email ?? account?.email ?? null;
   const sessionProfile = session?.user.user_metadata as Record<string, unknown> | undefined;
   const sessionName = [sessionProfile?.full_name, sessionProfile?.name, sessionProfile?.user_name, sessionProfile?.preferred_username].find(value => typeof value === "string" && value.trim()) as string | undefined;
@@ -983,6 +1050,11 @@ export default function Home() {
   const activeOpenCards = activeCards.filter(card => card.status !== "Done");
   const activeOverdueCards = activeOpenCards.filter(card => card.dueDate && new Date(`${card.dueDate}T23:59:59`) < new Date());
   const activeAttentionCards = activeOpenCards.filter(card => card.priority >= 8 || activeOverdueCards.some(overdue => overdue.id === card.id));
+  const sortedMilestones = [...milestones].sort((a, b) => a.milestoneDate.localeCompare(b.milestoneDate));
+  const milestoneToday = startOfDay(new Date());
+  const nextMilestone = sortedMilestones.find(item => new Date(`${item.milestoneDate}T12:00:00`) >= milestoneToday && item.progress < 100) ?? sortedMilestones.find(item => item.progress < 100) ?? sortedMilestones[0];
+  const overdueMilestones = sortedMilestones.filter(item => item.progress < 100 && new Date(`${item.milestoneDate}T23:59:59`) < milestoneToday);
+  const completedMilestones = sortedMilestones.filter(item => item.progress >= 100);
   const defaultProjectName = activeProjects.find(item => item.id === defaultProjectId)?.name ?? activeProjects[0]?.name ?? "";
   const currentMember = members.find(member => member.email.toLowerCase() === accountEmail?.toLowerCase()) ?? members.find(member => member.role === "Owner");
   const unreadCount = notifications.filter(notification => !notification.read).length;
@@ -1133,7 +1205,7 @@ export default function Home() {
         <div className="section-heading"><div><h3>{tr("Your hand", "내 카드")}</h3><p>{tr("Cards ready for you to play next.", "다음으로 진행할 준비가 된 카드입니다.")}</p></div><button onClick={() => setView("quests")}>{tr("View all", "전체 보기")} <span>→</span></button></div>
         <div className="card-grid hand-grid">{filtered.filter(card => card.status !== "Done").slice(0, 3).map(card => <QuestCard card={card} onOpen={setSelected} todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}</div>
         <div className="overview-bottom">
-          <section className="milestone-preview"><div className="mini-title"><div><small>NEXT MILESTONE</small><h3>Festival demo</h3></div><b>12 days</b></div><div className="progress-track"><span style={{width:"68%"}}/></div><p><b>34 of 50 cards</b> completed <span>68%</span></p><div className="milestone-tags"><i>Core loop ✓</i><i>Forest biome</i><i>Demo polish</i></div></section>
+          <section className="milestone-preview">{nextMilestone ? <><div className="mini-title"><div><small>{tr("NEXT MILESTONE", "다음 마일스톤")}</small><h3>{nextMilestone.title}</h3></div><b>{Math.max(0, Math.ceil((new Date(`${nextMilestone.milestoneDate}T12:00:00`).getTime() - milestoneToday.getTime()) / dayMs))} {tr("days", "일")}</b></div><div className="progress-track"><span className={nextMilestone.color} style={{width:`${nextMilestone.progress}%`}}/></div><p><b>{nextMilestone.completedCards} {tr("of", "/")} {nextMilestone.totalCards} {tr("cards", "카드")}</b> {tr("completed", "완료")} <span>{nextMilestone.progress}%</span></p><div className="milestone-tags"><i>{nextMilestone.stage}</i><i>{new Date(`${nextMilestone.milestoneDate}T12:00:00`).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric" })}</i><button onClick={() => setView("milestones")}>{tr("Manage", "관리")} →</button></div></> : <><div className="mini-title"><div><small>{tr("MILESTONES", "마일스톤")}</small><h3>{tr("No milestones yet", "아직 마일스톤이 없습니다")}</h3></div></div><button className="secondary-button" onClick={() => setView("milestones")}>{tr("Create one", "만들기")} →</button></>}</section>
           <section className="activity"><div className="mini-title"><div><small>LIVE PULSE</small><h3>Studio activity</h3></div><button onClick={() => setView("activity")} aria-label="View all activity">•••</button></div><ul><li><span className="pulse-avatar lilac">AS</span><p><b>Alex</b> moved <strong>Boss arena concept</strong> to Review<small>18 minutes ago</small></p></li><li><span className="pulse-avatar aqua">JL</span><p><b>Jules</b> completed <strong>Cave reverb zones</strong><small>42 minutes ago</small></p></li><li><span className="pulse-avatar gold">MK</span><p><b>Mina</b> added 2 comments<small>1 hour ago</small></p></li></ul></section>
         </div>
       </div>}
@@ -1209,10 +1281,12 @@ export default function Home() {
 
       {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Write studio notes, publish them, and share a read-only link.", "스튜디오 문서를 작성하고 공개하여 읽기 전용 링크로 공유하세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => { if (!session) { setAuthOpen(true); return; } setEditingDocument(null); setDocumentEditorOpen(true); }}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{documents.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{document.content.trim().slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => { setEditingDocument(document); setDocumentEditorOpen(true); }}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{documents.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
 
-      {view === "milestones" && <div className="content">
-        <div className="page-title"><div><p>{tr("ROADMAP", "로드맵")}</p><h1>{tr("Milestones", "마일스톤")}</h1><h2>{tr("Keep scope honest and the whole studio moving together.", "범위를 명확히 하고 스튜디오 전체가 함께 나아가세요.")}</h2></div><button className="secondary-button">＋ {tr("New milestone", "새 마일스톤")}</button></div>
-        <div className="timeline">
-          {[{date:"AUG 30",title:"Festival demo",progress:68,color:"violet",cards:"34 / 50 cards",note:"Playable demo for the Autumn Game Showcase"},{date:"SEP 27",title:"Content complete",progress:41,color:"mint",cards:"28 / 68 cards",note:"All chapters and production assets locked"},{date:"NOV 14",title:"Gold candidate",progress:18,color:"coral",cards:"12 / 66 cards",note:"Release-ready build for platform certification"}].map((m, i) => <article className="milestone-row" key={m.title}><div className="date-token"><small>2026</small><b>{m.date}</b></div><span className={`timeline-node ${m.color}`}>{i + 1}</span><div className="milestone-card"><div className="milestone-card-head"><div><small>{i === 0 ? "UP NEXT" : i === 1 ? "PRODUCTION" : "RELEASE"}</small><h3>{m.title}</h3><p>{m.note}</p></div><b>{m.progress}%</b></div><div className="progress-track"><span className={m.color} style={{width:`${m.progress}%`}}/></div><footer><span>{m.cards}</span><span>{i === 0 ? "12 days left" : i === 1 ? "40 days left" : "88 days left"}</span></footer></div></article>)}
+      {view === "milestones" && <div className="content milestones-content">
+        <div className="page-title"><div><p>{tr("ROADMAP", "로드맵")}</p><h1>{tr("Milestones", "마일스톤")}</h1><h2>{tr("Create delivery targets, track progress, and keep the whole studio aligned.", "출시 목표를 만들고 진행 상황을 추적하여 스튜디오 전체의 방향을 맞추세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => openMilestoneEditor()}>＋ {tr("New milestone", "새 마일스톤")}</button></div>
+        <div className="milestone-summary"><article><span>◆</span><div><small>{tr("TOTAL", "전체")}</small><b>{sortedMilestones.length}</b></div></article><article><span>✓</span><div><small>{tr("COMPLETED", "완료")}</small><b>{completedMilestones.length}</b></div></article><article className={overdueMilestones.length ? "warning" : ""}><span>!</span><div><small>{tr("OVERDUE", "기한 초과")}</small><b>{overdueMilestones.length}</b></div></article></div>
+        <div className="timeline milestone-management-list">
+          {sortedMilestones.map((milestone, index) => { const date = new Date(`${milestone.milestoneDate}T12:00:00`); const dayDelta = Math.ceil((date.getTime() - milestoneToday.getTime()) / dayMs); const timing = milestone.progress >= 100 ? tr("Completed", "완료") : dayDelta < 0 ? tr(`${Math.abs(dayDelta)} days overdue`, `${Math.abs(dayDelta)}일 기한 초과`) : dayDelta === 0 ? tr("Due today", "오늘 마감") : tr(`${dayDelta} days left`, `${dayDelta}일 남음`); return <article className={`milestone-row ${dayDelta < 0 && milestone.progress < 100 ? "overdue" : ""}`} key={milestone.id}><div className="date-token"><small>{date.getFullYear()}</small><b>{date.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric" }).toUpperCase()}</b></div><span className={`timeline-node ${milestone.color}`}>{milestone.progress >= 100 ? "✓" : index + 1}</span><div className="milestone-card"><div className="milestone-card-head"><div><small>{milestone.stage}</small><h3>{milestone.title}</h3><p>{milestone.note || tr("No description", "설명 없음")}</p></div><div className="milestone-card-controls"><b>{milestone.progress}%</b><button onClick={() => openMilestoneEditor(milestone)} disabled={Boolean(session) && !currentPermissions?.edit_cards} aria-label={tr(`Edit ${milestone.title}`, `${milestone.title} 수정`)}>✎</button><button className="milestone-delete-button" onClick={() => void deleteMilestone(milestone)} disabled={Boolean(session) && !currentPermissions?.edit_cards} aria-label={tr(`Delete ${milestone.title}`, `${milestone.title} 삭제`)}>×</button></div></div><div className="progress-track"><span className={milestone.color} style={{width:`${milestone.progress}%`}}/></div><footer><span><b>{milestone.completedCards}</b> / {milestone.totalCards} {tr("cards", "카드")}</span><span className={dayDelta < 0 && milestone.progress < 100 ? "overdue-label" : ""}>{timing}</span></footer></div></article>})}
+          {sortedMilestones.length === 0 && <div className="empty-projects milestone-empty"><span>◇</span><h3>{tr("No milestones yet", "아직 마일스톤이 없습니다")}</h3><p>{tr("Create your first delivery target to start the roadmap.", "첫 번째 출시 목표를 만들어 로드맵을 시작하세요.")}</p><button className="create-button" onClick={() => openMilestoneEditor()}>＋ {tr("New milestone", "새 마일스톤")}</button></div>}
         </div>
       </div>}
 
@@ -1252,6 +1326,8 @@ export default function Home() {
     {createProjectOpen && <div className="modal-backdrop" onMouseDown={() => setCreateProjectOpen(false)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create project"><header><div><small>{tr("NEW PROJECT", "새 프로젝트")}</small><h2>{tr("Start a project", "프로젝트 시작")}</h2></div><button onClick={() => setCreateProjectOpen(false)} aria-label="Close">×</button></header><form onSubmit={createProject}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus placeholder={tr("Project name", "프로젝트 이름")} /></label><label>{tr("Project lead", "프로젝트 리드")}<select name="owner">{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Starting template", "시작 템플릿")}<select><option>{tr("Game production", "게임 프로덕션")}</option><option>{tr("Marketing campaign", "마케팅 캠페인")}</option><option>{tr("Studio operations", "스튜디오 운영")}</option><option>{tr("Blank project", "빈 프로젝트")}</option></select></label><footer><button type="button" onClick={() => setCreateProjectOpen(false)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Create project", "프로젝트 만들기")}</button></footer></form></section></div>}
 
     {editProject && <div className="modal-backdrop" onMouseDown={() => setEditProject(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit project", "프로젝트 수정")}><header><div><small>{tr("PROJECT SETTINGS", "프로젝트 설정")}</small><h2>{tr("Edit project", "프로젝트 수정")}</h2></div><button onClick={() => setEditProject(null)} aria-label="Close">×</button></header><form onSubmit={saveProjectEdits}><label>{tr("Project name", "프로젝트 이름")}<input name="name" required autoFocus defaultValue={editProject.name} /></label><div className="form-row"><label>{tr("Project lead", "프로젝트 리드")}<select name="owner" defaultValue={editProject.owner}>{members.filter(member => member.status === "Active").map(member => <option key={member.id}>{member.name}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editProject.status}><option>Active</option><option>On hold</option><option>Archived</option></select></label></div><div className="form-row"><label>{tr("Progress", "진행률")}<input name="progress" type="number" min="0" max="100" defaultValue={editProject.progress} /></label><label>{tr("Color", "색상")}<select name="color" defaultValue={editProject.color}><option value="purple">Purple</option><option value="yellow">Yellow</option><option value="blue">Blue</option></select></label></div><footer><button type="button" onClick={() => setEditProject(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save project", "프로젝트 저장")}</button></footer></form></section></div>}
+
+    {milestoneEditorOpen && <div className="modal-backdrop" onMouseDown={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}><section className="modal create-modal milestone-editor-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("Create milestone", "마일스톤 만들기")}><header><div><small>{tr("ROADMAP TARGET", "로드맵 목표")}</small><h2>{editingMilestone ? tr("Edit milestone", "마일스톤 수정") : tr("New milestone", "새 마일스톤")}</h2></div><button onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }} aria-label="Close">×</button></header><form onSubmit={saveMilestone}><label>{tr("Milestone title", "마일스톤 제목")}<input name="title" required autoFocus maxLength={200} defaultValue={editingMilestone?.title ?? ""} placeholder={tr("What are you shipping?", "어떤 목표를 출시하나요?")} /></label><div className="form-row"><label>{tr("Target date", "목표 날짜")}<input name="milestoneDate" type="date" required defaultValue={editingMilestone?.milestoneDate ?? new Date().toISOString().slice(0,10)} /></label><label>{tr("Stage", "단계")}<select name="stage" defaultValue={editingMilestone?.stage ?? "UP NEXT"}><option>UP NEXT</option><option>PRODUCTION</option><option>REVIEW</option><option>RELEASE</option><option>COMPLETE</option></select></label></div><label>{tr("Description", "설명")}<textarea name="note" maxLength={1000} defaultValue={editingMilestone?.note ?? ""} placeholder={tr("Define the delivery target and success criteria…", "출시 목표와 성공 조건을 입력하세요…")} /></label><div className="form-row milestone-number-row"><label>{tr("Progress", "진행률")}<input name="progress" type="number" min="0" max="100" defaultValue={editingMilestone?.progress ?? 0} /></label><label>{tr("Completed cards", "완료 카드")}<input name="completedCards" type="number" min="0" defaultValue={editingMilestone?.completedCards ?? 0} /></label><label>{tr("Total cards", "전체 카드")}<input name="totalCards" type="number" min="0" defaultValue={editingMilestone?.totalCards ?? 0} /></label></div><label>{tr("Color", "색상")}<select name="color" defaultValue={editingMilestone?.color ?? "violet"}><option value="violet">{tr("Violet", "보라")}</option><option value="mint">{tr("Mint", "민트")}</option><option value="coral">{tr("Coral", "코랄")}</option></select></label><footer className="milestone-editor-footer">{editingMilestone ? <button className="danger-button" type="button" onClick={() => void deleteMilestone(editingMilestone)}>{tr("Delete milestone", "마일스톤 삭제")}</button> : <span />}<div><button type="button" onClick={() => { setMilestoneEditorOpen(false); setEditingMilestone(null); }}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{editingMilestone ? tr("Save changes", "변경 저장") : tr("Create milestone", "마일스톤 만들기")}</button></div></footer></form></section></div>}
 
     {editMember && <div className="modal-backdrop" onMouseDown={() => setEditMember(null)}><section className="modal create-modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={tr("Edit member", "멤버 수정")}><header><div><small>{tr("MEMBER ACCESS", "멤버 권한")}</small><h2>{tr("Edit member", "멤버 수정")}</h2></div><button onClick={() => setEditMember(null)} aria-label="Close">×</button></header><form onSubmit={saveMemberEdits}><label>{tr("Name", "이름")}<input name="name" required autoFocus defaultValue={editMember.name} /></label><label>{tr("Email", "이메일")}<input name="email" type="email" required defaultValue={editMember.email} /></label><div className="form-row"><label>{tr("Primary discipline", "주요 분야")}<select name="discipline" required defaultValue={editMember.discipline}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select></label><label>{tr("Status", "상태")}<select name="status" defaultValue={editMember.status}><option>Active</option><option>Invited</option></select></label></div><label>{tr("Workspace role", "워크스페이스 역할")}<select name="role" defaultValue={editMember.role} disabled={editMember.role === "Owner"}><option>Owner</option><option>Admin</option><option>Member</option><option>Guest</option></select>{editMember.role === "Owner" && <input type="hidden" name="role" value="Owner" />}</label><footer className="member-edit-footer">{editMember.role !== "Owner" ? <button className="danger-button" type="button" onClick={() => void removeMember(editMember)}>{tr("Remove member", "멤버 삭제")}</button> : <span />}<div><button type="button" onClick={() => setEditMember(null)}>{tr("Cancel", "취소")}</button><button className="create-button" type="submit">{tr("Save member", "멤버 저장")}</button></div></footer></form></section></div>}
 
