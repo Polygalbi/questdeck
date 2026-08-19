@@ -1439,6 +1439,24 @@ export default function Home() {
     }
   }
 
+  function removeDocumentIndent() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (!range.collapsed || range.startContainer.nodeType !== Node.TEXT_NODE) { formatDocument("outdent"); return; }
+    const textNode = range.startContainer as Text;
+    const whitespace = textNode.data.slice(0, range.startOffset).match(/(?: {1,4}|\t)$/)?.[0];
+    if (!whitespace) { formatDocument("outdent"); return; }
+    const nextOffset = range.startOffset - whitespace.length;
+    textNode.deleteData(nextOffset, whitespace.length);
+    range.setStart(textNode, nextOffset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    documentSelectionRef.current = range.cloneRange();
+    updateDocumentContent();
+  }
+
   function handleDocumentKeyDown(event: KeyboardEvent) {
     const modifier = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
@@ -1448,8 +1466,8 @@ export default function Home() {
     if (modifier && key === "u") { event.preventDefault(); formatDocument("underline"); return; }
     if (modifier && key === "z") { event.preventDefault(); formatDocument(event.shiftKey ? "redo" : "undo"); return; }
     if (modifier && (key === "y" || (event.shiftKey && key === "z"))) { event.preventDefault(); formatDocument("redo"); return; }
-    if (modifier && event.shiftKey && key === "7") { event.preventDefault(); formatDocument("insertOrderedList"); return; }
-    if (modifier && event.shiftKey && key === "8") { event.preventDefault(); formatDocument("insertUnorderedList"); return; }
+    if (modifier && event.shiftKey && event.code === "Digit7") { event.preventDefault(); formatDocument("insertOrderedList"); return; }
+    if (modifier && event.shiftKey && event.code === "Digit8") { event.preventDefault(); formatDocument("insertUnorderedList"); return; }
     if (event.key !== "Tab") return;
     event.preventDefault();
     const cell = activeDocumentCell();
@@ -1470,7 +1488,8 @@ export default function Home() {
     const selection = window.getSelection();
     const element = selection?.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode as Element : selection?.anchorNode?.parentElement;
     if (element?.closest("li")) formatDocument(event.shiftKey ? "outdent" : "indent");
-    else if (!event.shiftKey) formatDocument("insertText", "    ");
+    else if (event.shiftKey) removeDocumentIndent();
+    else formatDocument("insertText", "    ");
   }
 
   async function uploadDocumentImage(event: ChangeEvent<HTMLInputElement>) {

@@ -44,6 +44,9 @@ test("includes working document editing and table controls", async () => {
   ]);
   assert.match(page, /rememberDocumentSelection/);
   assert.match(page, /handleDocumentKeyDown/);
+  assert.match(page, /event\.code === "Digit7"/);
+  assert.match(page, /event\.code === "Digit8"/);
+  assert.match(page, /removeDocumentIndent/);
   assert.match(page, /document-table-picker/);
   assert.match(page, /mutateDocumentTable/);
   const inputHandler = page.match(/function updateDocumentContent\(\) \{([\s\S]*?)\n  \}/)?.[1] ?? "";
