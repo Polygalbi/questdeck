@@ -166,8 +166,8 @@ function priorityTone(priority: number) {
   return "normal";
 }
 
-function QuestCard({ card, onOpen, compact = false, todoSummary }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number } }) {
-  return <button className={`quest-card priority-${priorityTone(card.priority)} ${compact ? "compact" : ""}`} onClick={() => onOpen(card)} aria-label={`Open ${card.title}`}>
+function QuestCard({ card, onOpen, compact = false, todoSummary, draggable = false, dragging = false, onDragStart, onDragEnd }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number }; draggable?: boolean; dragging?: boolean; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void }) {
+  return <button className={`quest-card priority-${priorityTone(card.priority)} ${compact ? "compact" : ""} ${dragging ? "board-card-dragging" : ""}`} onClick={() => onOpen(card)} aria-label={`Open ${card.title}`} draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd}>
     <div className={`card-accent ${card.color}`}><span>{card.tag}</span><b className={`priority-badge ${priorityTone(card.priority)}`}>P{card.priority}</b><b>{card.points}</b></div>
     <div className="card-body"><small>{card.project.toUpperCase()}</small><h4>{card.title}</h4>{!compact && <p>{card.description}</p>}{todoSummary && todoSummary.total > 0 && <div className="card-subtask-progress" aria-label={`${todoSummary.completed} of ${todoSummary.total} sub-tasks complete`}><span><i style={{width:`${(todoSummary.completed / todoSummary.total) * 100}%`}} /></span><b>☑ {todoSummary.completed}/{todoSummary.total}</b></div>}<div className="card-footer"><span className="avatar">{card.owner}</span><span>◷ {card.due}</span><span>◌ {card.id % 4}</span></div></div>
   </button>;
@@ -243,6 +243,8 @@ export default function Home() {
   const [timelineRowHeight, setTimelineRowHeight] = useState(132);
   const [timelineHover, setTimelineHover] = useState<{cardId: number; left: number; top: number} | null>(null);
   const [draggedTimelineCard, setDraggedTimelineCard] = useState<number | null>(null);
+  const [draggedBoardCard, setDraggedBoardCard] = useState<number | null>(null);
+  const [boardDropStatus, setBoardDropStatus] = useState<Status | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
@@ -493,6 +495,25 @@ export default function Home() {
     setCards(prev => prev.map(item => item.id === card.id ? updated : item));
     setSelected(updated); setToast(`Moved to ${status}`);
     void syncQuestdeck("update_card", { card: updated }, accessToken).catch(() => setToast(tr("Status saved locally; Supabase sync failed", "상태는 로컬에 저장되었지만 Supabase 동기화에 실패했습니다")));
+  }
+
+  async function moveBoardCard(cardId: number, status: Status) {
+    const accessToken = requireSession();
+    const previous = cards.find(card => card.id === cardId);
+    setDraggedBoardCard(null);
+    setBoardDropStatus(null);
+    if (!accessToken || !previous || previous.status === status) return;
+    const updated = { ...previous, status };
+    setCards(current => current.map(card => card.id === cardId ? updated : card));
+    setSelected(current => current?.id === cardId ? updated : current);
+    setToast(tr(`${previous.title} moved to ${statusLabel(status)}`, `${previous.title} 카드를 ${statusLabel(status)}(으)로 이동했습니다`));
+    try {
+      await syncQuestdeck("update_card", { card: updated }, accessToken);
+    } catch (error) {
+      setCards(current => current.map(card => card.id === cardId ? previous : card));
+      setSelected(current => current?.id === cardId ? previous : current);
+      setToast(error instanceof Error ? error.message : tr("Could not move card", "카드를 이동하지 못했습니다"));
+    }
   }
 
   async function inviteMember(event: FormEvent<HTMLFormElement>) {
@@ -1095,7 +1116,11 @@ export default function Home() {
       {view === "quests" && <div className="content board-content">
         <div className="page-title"><div><p>{tr("PRODUCTION", "프로덕션")}</p><h1>{tr("Production board", "프로덕션 보드")}</h1><h2>{tr("Move every quest from idea to shipped.", "모든 퀘스트를 아이디어에서 출시까지 진행하세요.")}</h2></div><div className="board-actions"><select value={project} onChange={e => setProject(e.target.value)} aria-label={tr("Filter by project", "프로젝트 필터")}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{activeProjects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}</select><select value={priorityFilter} onChange={event => setPriorityFilter(event.target.value as typeof priorityFilter)} aria-label={tr("Filter by priority", "우선순위 필터")}><option value="All">{tr("All priorities", "모든 우선순위")}</option><option value="Critical">{tr("Critical · 8–10", "긴급 · 8–10")}</option><option value="High">{tr("High · 5–7", "높음 · 5–7")}</option><option value="Normal">{tr("Normal · 1–4", "보통 · 1–4")}</option></select><select value={boardSort} onChange={event => setBoardSort(event.target.value as typeof boardSort)} aria-label={tr("Sort cards", "카드 정렬")}><option value="Default">{tr("Default order", "기본 순서")}</option><option value="Priority">{tr("Priority: high first", "우선순위 높은 순")}</option><option value="Due date">{tr("Due date", "마감일")}</option><option value="Effort">{tr("Effort: high first", "작업량 높은 순")}</option></select><button onClick={() => { setProject("All projects"); setPriorityFilter("All"); setBoardSort("Default"); setQuery(""); }}>{tr("Clear filters", "필터 초기화")}</button></div></div>
         <div className="board">
-          {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className="board-column" key={status}><header><span className={`status-dot s${index}`}/><h3>{columnNames[status] || statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><div className="column-menu-wrap"><button className={`column-menu-trigger ${activeColumnMenu === status ? "active" : ""}`} onClick={() => setActiveColumnMenu(current => current === status ? null : status)} aria-label={`${columnNames[status] || statusLabel(status)} ${tr("options", "옵션")}`} aria-expanded={activeColumnMenu === status}>•••</button>{activeColumnMenu === status && <div className="column-menu" role="menu"><button role="menuitem" onClick={() => openCreateCard(status)}>＋ <span>{tr("Add card here", "여기에 카드 추가")}</span></button><button role="menuitem" onClick={() => { setEditColumn(status); setActiveColumnMenu(null); }}>✎ <span>{tr("Rename column", "열 이름 변경")}</span></button>{columnNames[status] && <button role="menuitem" onClick={() => resetColumnName(status)}>↺ <span>{tr("Reset name", "기본 이름 복원")}</span></button>}</div>}</div></header><div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}<button className="add-inline" onClick={() => openCreateCard(status)}>＋ {tr("Add a card", "카드 추가")}</button></div></section>)}
+          {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className={`board-column ${boardDropStatus === status ? "board-drop-target" : ""}`} key={status} onDragEnter={event => { event.preventDefault(); if (draggedBoardCard) setBoardDropStatus(status); }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (draggedBoardCard) setBoardDropStatus(status); }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBoardDropStatus(current => current === status ? null : current); }} onDrop={event => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-board-card") || draggedBoardCard); if (cardId) void moveBoardCard(cardId, status); }}>
+            <header><span className={`status-dot s${index}`}/><h3>{columnNames[status] || statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><div className="column-menu-wrap"><button className={`column-menu-trigger ${activeColumnMenu === status ? "active" : ""}`} onClick={() => setActiveColumnMenu(current => current === status ? null : status)} aria-label={`${columnNames[status] || statusLabel(status)} ${tr("options", "옵션")}`} aria-expanded={activeColumnMenu === status}>•••</button>{activeColumnMenu === status && <div className="column-menu" role="menu"><button role="menuitem" onClick={() => openCreateCard(status)}>＋ <span>{tr("Add card here", "여기에 카드 추가")}</span></button><button role="menuitem" onClick={() => { setEditColumn(status); setActiveColumnMenu(null); }}>✎ <span>{tr("Rename column", "열 이름 변경")}</span></button>{columnNames[status] && <button role="menuitem" onClick={() => resetColumnName(status)}>↺ <span>{tr("Reset name", "기본 이름 복원")}</span></button>}</div>}</div></header>
+            <div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact draggable dragging={draggedBoardCard === card.id} onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-board-card", String(card.id)); setDraggedBoardCard(card.id); setBoardDropStatus(status); }} onDragEnd={() => { setDraggedBoardCard(null); setBoardDropStatus(null); }} todoSummary={{completed:(subTodos[card.id] ?? []).filter(todo => todo.done).length,total:(subTodos[card.id] ?? []).length}} key={card.id}/>)}<button className="add-inline" onClick={() => openCreateCard(status)}>＋ {tr("Add a card", "카드 추가")}</button></div>
+            {boardDropStatus === status && draggedBoardCard && <div className="board-drop-hint">{tr(`Drop in ${statusLabel(status)}`, `${statusLabel(status)}에 놓기`)}</div>}
+          </section>)}
         </div>
       </div>}
 
