@@ -58,6 +58,7 @@ async function syncQuestdeck<T = { ok: boolean }>(action: string, payload: Recor
 
 const DOCUMENT_IMAGE_BUCKET = "questdeck-document-images";
 const DOCUMENT_IMAGE_PUBLIC_PREFIX = `${SUPABASE_URL}/storage/v1/object/public/${DOCUMENT_IMAGE_BUCKET}/`;
+const documentImagePathPattern = /^[0-9a-f-]{36}\/\d+\/[a-zA-Z0-9._-]+$/i;
 const documentImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const richTextTags = new Set(["p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "ul", "ol", "li", "blockquote", "a", "table", "thead", "tbody", "tr", "th", "td", "hr", "figure", "figcaption", "img"]);
 function escapeHtml(value: string) { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;"); }
@@ -75,12 +76,32 @@ function sanitizeRichText(value: string) {
     if (tag === "img") {
       const src = attributes.match(/src\s*=\s*[\"']([^\"']+)[\"']/i)?.[1] ?? "";
       const alt = attributes.match(/alt\s*=\s*[\"']([^\"']*)[\"']/i)?.[1] ?? "";
-      return src.startsWith(DOCUMENT_IMAGE_PUBLIC_PREFIX) ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">` : "";
+      const storedPath = attributes.match(/data-storage-path\s*=\s*[\"']([^\"']+)[\"']/i)?.[1] ?? "";
+      const legacyPath = src.startsWith(DOCUMENT_IMAGE_PUBLIC_PREFIX) ? decodeURIComponent(src.slice(DOCUMENT_IMAGE_PUBLIC_PREFIX.length)) : "";
+      const path = storedPath || legacyPath;
+      return documentImagePathPattern.test(path) ? `<img data-storage-path="${escapeHtml(path)}" alt="${escapeHtml(alt)}">` : "";
     }
     return tag === "br" || tag === "hr" ? `<${tag}>` : `<${tag}>`;
   });
 }
 function richTextExcerpt(value: string) { return value.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim(); }
+
+async function hydrateDocumentImages(value: string) {
+  const sanitized = sanitizeRichText(value);
+  if (typeof DOMParser === "undefined") return sanitized;
+  const parsed = new DOMParser().parseFromString(sanitized, "text/html");
+  const images = Array.from(parsed.querySelectorAll<HTMLImageElement>("img[data-storage-path]"));
+  const paths = Array.from(new Set(images.map(image => image.dataset.storagePath ?? "").filter(path => documentImagePathPattern.test(path))));
+  if (!paths.length) return parsed.body.innerHTML;
+  const { data, error } = await supabase.storage.from(DOCUMENT_IMAGE_BUCKET).createSignedUrls(paths, 3600);
+  if (error) return parsed.body.innerHTML;
+  const signedByPath = new Map((data ?? []).filter(item => item.signedUrl).map(item => [item.path, item.signedUrl]));
+  images.forEach(image => {
+    const signedUrl = signedByPath.get(image.dataset.storagePath ?? "");
+    if (signedUrl) image.src = signedUrl;
+  });
+  return parsed.body.innerHTML;
+}
 
 const initialCards: Card[] = [
   { id: 1, title: "Tune player movement", description: "Make traversal feel crisp and responsive before the next playtest.", tag: "Gameplay", owner: "MK", points: 3, priority: 9, color: "violet", status: "In progress", project: "Project Nightfall", due: "Today", dueDate: "2026-08-18" },
@@ -390,9 +411,9 @@ export default function Home() {
     setPublicDocumentLoading(true);
     void fetch(`${SUPABASE_URL}/rest/v1/questdeck_documents?select=id,title,content,created_by_email,owner_name,is_published,share_slug,created_at,updated_at&share_slug=eq.${shareSlug}&is_published=eq.true&limit=1`, { headers: { apikey: SUPABASE_PUBLISHABLE_KEY } })
       .then(response => response.ok ? response.json() : Promise.reject(new Error("Document request failed")))
-      .then((items: Array<{ id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }>) => {
+      .then(async (items: Array<{ id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }>) => {
         const item = items[0];
-        if (item) setPublicDocument({ id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at });
+        if (item) setPublicDocument({ id: item.id, title: item.title, content: await hydrateDocumentImages(item.content), createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at });
       })
       .finally(() => setPublicDocumentLoading(false));
   }, []);
@@ -1055,14 +1076,16 @@ export default function Home() {
   }
 
   function openDocumentEditor(document: WorkspaceDocument) {
+    const content = sanitizeRichText(document.content);
     setEditingDocument(document);
     setDocumentDraftTitle(document.title);
-    setDocumentDraftContent(sanitizeRichText(document.content));
+    setDocumentDraftContent(content);
     setDocumentDirty(false);
     setDocumentSaveState("saved");
     setDocumentCommentsOpen(true);
     setDocumentEditorOpen(true);
     void loadDocumentComments(document.id);
+    void hydrateDocumentImages(content).then(hydrated => setDocumentDraftContent(hydrated));
   }
 
   async function createBlankDocument() {
@@ -1138,8 +1161,9 @@ export default function Home() {
     try {
       const { error } = await supabase.storage.from(DOCUMENT_IMAGE_BUCKET).upload(path, file, { cacheControl: "3600", contentType: file.type, upsert: false });
       if (error) throw error;
-      const { data } = supabase.storage.from(DOCUMENT_IMAGE_BUCKET).getPublicUrl(path);
-      formatDocument("insertHTML", `<figure><img src="${escapeHtml(data.publicUrl)}" alt="${escapeHtml(file.name)}"><figcaption>${escapeHtml(file.name)}</figcaption></figure><p><br></p>`);
+      const { data, error: signedError } = await supabase.storage.from(DOCUMENT_IMAGE_BUCKET).createSignedUrl(path, 3600);
+      if (signedError) throw signedError;
+      formatDocument("insertHTML", `<figure><img src="${escapeHtml(data.signedUrl)}" data-storage-path="${escapeHtml(path)}" alt="${escapeHtml(file.name)}"><figcaption>${escapeHtml(file.name)}</figcaption></figure><p><br></p>`);
       setToast(tr("Image added to the document", "문서에 이미지를 추가했습니다"));
     } catch (error) {
       setToast(error instanceof Error ? error.message : tr("Could not upload image", "이미지를 업로드하지 못했습니다"));
@@ -1184,8 +1208,8 @@ export default function Home() {
     if (!accessToken) return;
     try {
       if (session) {
-        const imagePaths = Array.from(document.content.matchAll(new RegExp(`${DOCUMENT_IMAGE_PUBLIC_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\"']+)`, "g")))
-          .map(match => decodeURIComponent(match[1]))
+        const imagePaths = Array.from(document.content.matchAll(/data-storage-path=["']([^"']+)["']/g))
+          .map(match => match[1])
           .filter(path => path.startsWith(`${session.user.id}/${document.id}/`));
         if (imagePaths.length) await supabase.storage.from(DOCUMENT_IMAGE_BUCKET).remove(imagePaths);
       }
