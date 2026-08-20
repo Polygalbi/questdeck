@@ -295,6 +295,8 @@ export default function Home() {
   const [milestoneEditorOpen, setMilestoneEditorOpen] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
   const [milestoneDraftDate, setMilestoneDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [milestoneSyncState, setMilestoneSyncState] = useState<"synced" | "syncing" | "error">("synced");
+  const milestoneSyncRequest = useRef(0);
   const [publicDocument, setPublicDocument] = useState<WorkspaceDocument | null>(null);
   const [publicDocumentLoading, setPublicDocumentLoading] = useState(false);
   const [productionDisciplines, setProductionDisciplines] = useState(initialProductionDisciplines);
@@ -1774,6 +1776,47 @@ export default function Home() {
     };
   }
 
+  async function syncMilestoneProgress(force = false) {
+    const accessToken = session?.access_token;
+    if (!accessToken || workspaceAccess !== "allowed" || milestones.length === 0) return;
+
+    const recalculated = milestones.map(milestone => {
+      const { progress, completedCards, totalCards } = calculateMilestoneStats(milestone.milestoneDate);
+      return { ...milestone, progress, completedCards, totalCards };
+    });
+    const changed = recalculated.filter((milestone, index) => {
+      const current = milestones[index];
+      return milestone.progress !== current.progress || milestone.completedCards !== current.completedCards || milestone.totalCards !== current.totalCards;
+    });
+    const syncTargets = force ? recalculated : changed;
+
+    if (changed.length > 0) {
+      const updates = new Map(changed.map(milestone => [milestone.id, milestone]));
+      setMilestones(current => current.map(milestone => updates.get(milestone.id) ?? milestone));
+    }
+    if (syncTargets.length === 0) {
+      setMilestoneSyncState("synced");
+      return;
+    }
+
+    const requestId = ++milestoneSyncRequest.current;
+    setMilestoneSyncState("syncing");
+    try {
+      await Promise.all(syncTargets.map(milestone => syncQuestdeck("update_milestone", { milestone }, accessToken)));
+      if (milestoneSyncRequest.current === requestId) setMilestoneSyncState("synced");
+    } catch {
+      if (milestoneSyncRequest.current === requestId) setMilestoneSyncState("error");
+    }
+  }
+
+  const milestoneDefinitionSignature = milestones.map(milestone => `${milestone.id}:${milestone.milestoneDate}:${milestone.title}:${milestone.stage}`).join("|");
+
+  useEffect(() => {
+    if (!session?.access_token || workspaceAccess !== "allowed" || milestones.length === 0) return;
+    const timer = window.setTimeout(() => void syncMilestoneProgress(), 500);
+    return () => window.clearTimeout(timer);
+  }, [cards, projects, milestoneDefinitionSignature, session?.access_token, workspaceAccess]);
+
   async function saveMilestone(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const accessToken = requireSession();
@@ -2307,7 +2350,7 @@ export default function Home() {
       {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Create rich team documents with autosave, discussion, and shareable links.", "자동 저장, 토론, 공유 링크를 지원하는 팀 문서를 만드세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void createBlankDocument()}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{documents.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{richTextExcerpt(document.content).slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => openDocumentEditor(document)}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{documents.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
 
       {view === "milestones" && <div className="content milestones-content">
-        <div className="page-title"><div><p>{tr("ROADMAP", "로드맵")}</p><h1>{tr("Milestones", "마일스톤")}</h1><h2>{tr("Create delivery targets, track progress, and keep the whole studio aligned.", "출시 목표를 만들고 진행 상황을 추적하여 스튜디오 전체의 방향을 맞추세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => openMilestoneEditor()}>＋ {tr("New milestone", "새 마일스톤")}</button></div>
+        <div className="page-title"><div><p>{tr("ROADMAP", "로드맵")}</p><h1>{tr("Milestones", "마일스톤")}</h1><h2>{tr("Create delivery targets, track progress, and keep the whole studio aligned.", "출시 목표를 만들고 진행 상황을 추적하여 스튜디오 전체의 방향을 맞추세요.")}</h2></div><div className="milestone-page-actions"><span className={`milestone-sync-status ${milestoneSyncState}`} aria-live="polite"><i />{milestoneSyncState === "syncing" ? tr("Updating progress…", "진행률 업데이트 중…") : milestoneSyncState === "error" ? tr("Progress sync failed", "진행률 동기화 실패") : tr("Progress is live", "진행률 자동 업데이트")}</span><button className="secondary-button" disabled={milestoneSyncState === "syncing" || Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void syncMilestoneProgress(true)}>↻ {tr("Recalculate", "다시 계산")}</button><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => openMilestoneEditor()}>＋ {tr("New milestone", "새 마일스톤")}</button></div></div>
         <div className="milestone-summary"><article><span>◆</span><div><small>{tr("TOTAL", "전체")}</small><b>{sortedMilestones.length}</b></div></article><article><span>✓</span><div><small>{tr("COMPLETED", "완료")}</small><b>{completedMilestones.length}</b></div></article><article className={overdueMilestones.length ? "warning" : ""}><span>!</span><div><small>{tr("OVERDUE", "기한 초과")}</small><b>{overdueMilestones.length}</b></div></article></div>
         <div className="timeline milestone-management-list">
           {sortedMilestones.map((milestone, index) => { const date = new Date(`${milestone.milestoneDate}T12:00:00`); const dayDelta = Math.ceil((date.getTime() - milestoneToday.getTime()) / dayMs); const timing = milestone.progress >= 100 ? tr("Completed", "완료") : dayDelta < 0 ? tr(`${Math.abs(dayDelta)} days overdue`, `${Math.abs(dayDelta)}일 기한 초과`) : dayDelta === 0 ? tr("Due today", "오늘 마감") : tr(`${dayDelta} days left`, `${dayDelta}일 남음`); return <article className={`milestone-row ${dayDelta < 0 && milestone.progress < 100 ? "overdue" : ""}`} key={milestone.id}><div className="date-token"><small>{date.getFullYear()}</small><b>{date.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { month:"short", day:"numeric" }).toUpperCase()}</b></div><span className={`timeline-node ${milestone.color}`}>{milestone.progress >= 100 ? "✓" : index + 1}</span><div className="milestone-card"><div className="milestone-card-head"><div><small>{milestone.stage}</small><h3>{milestone.title}</h3><p>{milestone.note || tr("No description", "설명 없음")}</p></div><div className="milestone-card-controls"><b>{milestone.progress}%</b><button onClick={() => openMilestoneEditor(milestone)} disabled={Boolean(session) && !currentPermissions?.edit_cards} aria-label={tr(`Edit ${milestone.title}`, `${milestone.title} 수정`)}>✎</button><button className="milestone-delete-button" onClick={() => void deleteMilestone(milestone)} disabled={Boolean(session) && !currentPermissions?.edit_cards} aria-label={tr(`Delete ${milestone.title}`, `${milestone.title} 삭제`)}>×</button></div></div><div className="progress-track"><span className={milestone.color} style={{width:`${milestone.progress}%`}}/></div><footer><span><b>{milestone.completedCards}</b> / {milestone.totalCards} {tr("cards", "카드")}</span><span className={dayDelta < 0 && milestone.progress < 100 ? "overdue-label" : ""}>{timing}</span></footer></div></article>})}

@@ -109,3 +109,16 @@ test("includes persistent Hero Cards, sub-cards, and Journey templates", async (
   assert.match(page, /Drag empty space to browse dates/);
   assert.match(css, /\.timeline-pan-surface/);
 });
+
+test("keeps milestone progress synchronized with active cards", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /syncMilestoneProgress/);
+  assert.match(page, /syncQuestdeck\("update_milestone"/);
+  assert.match(page, /milestoneDefinitionSignature/);
+  assert.match(page, /Progress is live/);
+  assert.match(page, /Recalculate/);
+  assert.match(css, /\.milestone-sync-status/);
+});
