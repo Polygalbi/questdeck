@@ -29,11 +29,16 @@ test("includes the high-volume board and backup controls", async () => {
   ]);
   assert.match(page, /className="quick-card-form"/);
   assert.match(page, /ownerFilter/);
+  assert.match(page, /collaborator_initials/);
+  assert.match(page, /CoworkerPicker/);
+  assert.match(page, /card-title-row/);
   assert.match(page, /disciplineFilter/);
   assert.match(page, /dueFilter/);
   assert.match(page, /downloadWorkspaceBackup/);
   assert.match(page, /restoreBoardBackup/);
   assert.match(css, /board-density-compact/);
+  assert.match(css, /\.card-assignee-stack/);
+  assert.match(css, /\.coworker-picker/);
   assert.match(css, /\.column-cards\{[^}]*overflow-y:auto/);
 });
 
