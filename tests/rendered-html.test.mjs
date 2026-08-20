@@ -264,12 +264,13 @@ test("isolates owner tenants and provides content-blind platform administration"
   assert.doesNotMatch(proxy, /questdeck_members\?select=id/);
 });
 
-test("keeps first-time members in a tenant-scoped owner waiting room", async () => {
-  const [page, waitingRoom, waitingCss, migration, syncFunction] = await Promise.all([
+test("keeps first-time members in a three-day owner-managed waiting room", async () => {
+  const [page, waitingRoom, waitingCss, migration, globalMigration, syncFunction] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/waiting-room.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/waiting-room.css", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/202608200007_workspace_waiting_room.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202608200008_global_waiting_list.sql", import.meta.url), "utf8"),
     readFile(new URL("../supabase/functions/questdeck-sync/index.ts", import.meta.url), "utf8"),
   ]);
   assert.match(page, /workspaceAccess === "waiting"/);
@@ -278,12 +279,17 @@ test("keeps first-time members in a tenant-scoped owner waiting room", async () 
   assert.match(waitingRoom, /request_workspace_access/);
   assert.match(waitingRoom, /approve_waiting_request/);
   assert.match(waitingRoom, /decline_waiting_request/);
-  assert.match(waitingRoom, /rotate_join_code/);
-  assert.match(waitingRoom, /Other owners cannot see these requests/);
+  assert.match(waitingRoom, /clear_waiting_requests/);
+  assert.match(waitingRoom, /Every Owner can see this Questdeck-wide list/);
+  assert.match(waitingRoom, /expires automatically three days/);
   assert.match(waitingCss, /waiting-room-page/);
   assert.match(migration, /questdeck_workspace_join_codes/);
   assert.match(migration, /questdeck_membership_requests/);
   assert.match(migration, /revoke all on public\.questdeck_membership_requests from anon, authenticated/);
+  assert.match(globalMigration, /alter column target_workspace_id drop not null/);
+  assert.match(globalMigration, /unique \(auth_user_id\)/);
   assert.match(syncFunction, /Only owners can manage the waiting list/);
-  assert.match(syncFunction, /context\.ownedWorkspaceIds\.includes\(String\(pending\.target_workspace_id\)\)/);
+  assert.match(syncFunction, /3 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(syncFunction, /context\.ownedWorkspaceIds\.includes\(targetWorkspaceId\)/);
+  assert.match(syncFunction, /Only owners can clear the waiting list/);
 });

@@ -123,6 +123,11 @@ async function waitingRoomEligible(request: Request) {
   return !membership;
 }
 
+async function clearExpiredWaitingRequests() {
+  const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  await rest(`questdeck_membership_requests?status=eq.Pending&requested_at=lt.${encodeURIComponent(cutoff)}`, { method: "DELETE" });
+}
+
 type ActivityEvent = {
   action: string;
   target: string;
@@ -213,6 +218,7 @@ Deno.serve(async (request) => {
     if (action === "load_access") {
       const isWaiting = !context && !admin && await waitingRoomEligible(request);
       const user = identity(request);
+      if (isWaiting) await clearExpiredWaitingRequests();
       const pendingRequests = isWaiting && user
         ? await rest(`questdeck_membership_requests?select=id,status,requested_at&auth_user_id=eq.${encodeURIComponent(user.userId)}&status=eq.Pending&order=requested_at.desc`)
         : [];
@@ -231,21 +237,16 @@ Deno.serve(async (request) => {
       if (!user) return json({ error: "Sign in required" }, 401);
       if (context || admin) return json({ error: "This account already has access" }, 400);
       if (!await waitingRoomEligible(request)) return json({ error: "This account cannot request workspace access" }, 403);
-      const joinCode = String(body.joinCode ?? "").trim().toLowerCase();
       const displayName = String(body.displayName ?? "").trim().slice(0, 120) || user.email.split("@")[0];
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(joinCode)) return json({ error: "Invalid invitation code" }, 400);
-      const code = (await rest(`questdeck_workspace_join_codes?select=workspace_id&join_code=eq.${encodeURIComponent(joinCode)}&limit=1`))?.[0] ?? null;
-      if (!code) return json({ error: "Invitation code not found" }, 404);
-      const workspace = (await rest(`questdeck_workspaces?select=id,status&id=eq.${encodeURIComponent(code.workspace_id)}&status=eq.Active&limit=1`))?.[0] ?? null;
-      if (!workspace) return json({ error: "This invitation is not available" }, 400);
-      await rest("questdeck_membership_requests?on_conflict=auth_user_id,target_workspace_id", {
+      await clearExpiredWaitingRequests();
+      await rest("questdeck_membership_requests?on_conflict=auth_user_id", {
         method: "POST",
         headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify({
           auth_user_id: user.userId,
           email: user.email,
           display_name: displayName,
-          target_workspace_id: workspace.id,
+          target_workspace_id: null,
           status: "Pending",
           requested_at: new Date().toISOString(),
           resolved_at: null,
@@ -345,39 +346,39 @@ Deno.serve(async (request) => {
 
     if (action === "load_waiting_requests") {
       if (!ownerOnly(context)) return json({ error: "Only owners can manage the waiting list" }, 403);
+      await clearExpiredWaitingRequests();
       const ownedIds = context.ownedWorkspaceIds;
       const workspaceFilter = ownedIds.map((id: string) => `"${id.replaceAll('"', '')}"`).join(",");
-      const [workspaceRows, joinCodeRows, requestRows] = await Promise.all([
+      const [workspaceRows, requestRows] = await Promise.all([
         rest(`questdeck_workspaces?select=id,name,initials,status&id=in.(${workspaceFilter})&order=created_at.asc`),
-        rest(`questdeck_workspace_join_codes?select=workspace_id,join_code&workspace_id=in.(${workspaceFilter})`),
-        rest(`questdeck_membership_requests?select=id,auth_user_id,email,display_name,target_workspace_id,status,requested_at&target_workspace_id=in.(${workspaceFilter})&status=eq.Pending&order=requested_at.asc`),
+        rest("questdeck_membership_requests?select=id,auth_user_id,email,display_name,status,requested_at&status=eq.Pending&order=requested_at.asc"),
       ]);
-      const invitations = (workspaceRows ?? []).map((workspace: any) => ({
+      const workspaces = (workspaceRows ?? []).filter((workspace: any) => workspace.status === "Active").map((workspace: any) => ({
         workspaceId: String(workspace.id),
         workspaceName: String(workspace.name),
         workspaceInitials: String(workspace.initials),
-        status: String(workspace.status),
-        joinCode: String((joinCodeRows ?? []).find((item: any) => item.workspace_id === workspace.id)?.join_code ?? ""),
       }));
       const requests = (requestRows ?? []).map((item: any) => ({
         id: Number(item.id),
         email: String(item.email),
         displayName: String(item.display_name || item.email.split("@")[0]),
-        targetWorkspaceId: String(item.target_workspace_id),
-        targetWorkspaceName: String((workspaceRows ?? []).find((workspace: any) => workspace.id === item.target_workspace_id)?.name ?? "Workspace"),
         requestedAt: String(item.requested_at),
+        expiresAt: new Date(new Date(item.requested_at).getTime() + 3 * 24 * 60 * 60 * 1000).toISOString(),
       }));
-      return json({ ok: true, invitations, requests });
+      return json({ ok: true, workspaces, requests });
     }
 
     if (action === "approve_waiting_request") {
       if (!ownerOnly(context)) return json({ error: "Only owners can approve waiting members" }, 403);
       const requestId = Number(body.requestId);
+      const targetWorkspaceId = String(body.targetWorkspaceId ?? "").trim();
       const role = ["Admin", "Team Leader", "Member", "Guest"].includes(String(body.role)) ? String(body.role) : "Member";
       const discipline = String(body.discipline ?? "General").trim().slice(0, 120) || "General";
       if (!Number.isSafeInteger(requestId)) return json({ error: "Invalid waiting request" }, 400);
+      if (!context.ownedWorkspaceIds.includes(targetWorkspaceId)) return json({ error: "Choose one of your own workspaces" }, 403);
+      await clearExpiredWaitingRequests();
       const pending = (await rest(`questdeck_membership_requests?select=*&id=eq.${requestId}&status=eq.Pending&limit=1`))?.[0] ?? null;
-      if (!pending || !context.ownedWorkspaceIds.includes(String(pending.target_workspace_id))) return json({ error: "Waiting request not found" }, 404);
+      if (!pending) return json({ error: "Waiting request not found or expired" }, 404);
       let member = (await rest(`questdeck_members?select=*&auth_user_id=eq.${encodeURIComponent(pending.auth_user_id)}&limit=1`))?.[0] ?? null;
       member ??= (await rest(`questdeck_members?select=*&email=ilike.${encodeURIComponent(pending.email)}&limit=1`))?.[0] ?? null;
       const displayName = String(pending.display_name || pending.email.split("@")[0]).trim().slice(0, 120);
@@ -397,12 +398,12 @@ Deno.serve(async (request) => {
       if (!member?.id) return json({ error: "Member could not be created" }, 500);
       await rest("questdeck_workspace_memberships?on_conflict=workspace_id,member_id", {
         method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({ workspace_id: pending.target_workspace_id, member_id: member.id, role, discipline, updated_at: new Date().toISOString() }),
+        body: JSON.stringify({ workspace_id: targetWorkspaceId, member_id: member.id, role, discipline, updated_at: new Date().toISOString() }),
       });
       await rest(`questdeck_membership_requests?id=eq.${requestId}`, {
         method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "Approved", resolved_at: new Date().toISOString() }),
       });
-      await recordActivity({ ...context, workspaceId: String(pending.target_workspace_id) }, { action: "approved member", target: displayName, detail: `${role} · ${discipline}`, eventType: "Team", tone: "mint", destination: "management" });
+      await recordActivity({ ...context, workspaceId: targetWorkspaceId }, { action: "approved member", target: displayName, detail: `${role} · ${discipline}`, eventType: "Team", tone: "mint", destination: "management" });
       return json({ ok: true, requestId, memberId: Number(member.id) });
     }
 
@@ -410,23 +411,19 @@ Deno.serve(async (request) => {
       if (!ownerOnly(context)) return json({ error: "Only owners can manage the waiting list" }, 403);
       const requestId = Number(body.requestId);
       if (!Number.isSafeInteger(requestId)) return json({ error: "Invalid waiting request" }, 400);
-      const pending = (await rest(`questdeck_membership_requests?select=id,target_workspace_id&status=eq.Pending&id=eq.${requestId}&limit=1`))?.[0] ?? null;
-      if (!pending || !context.ownedWorkspaceIds.includes(String(pending.target_workspace_id))) return json({ error: "Waiting request not found" }, 404);
+      const pending = (await rest(`questdeck_membership_requests?select=id&status=eq.Pending&id=eq.${requestId}&limit=1`))?.[0] ?? null;
+      if (!pending) return json({ error: "Waiting request not found" }, 404);
       await rest(`questdeck_membership_requests?id=eq.${requestId}`, {
         method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "Declined", resolved_at: new Date().toISOString() }),
       });
       return json({ ok: true, requestId });
     }
 
-    if (action === "rotate_join_code") {
-      if (!ownerOnly(context)) return json({ error: "Only owners can rotate invitation codes" }, 403);
-      const workspaceId = String(body.targetWorkspaceId ?? "").trim();
-      if (!context.ownedWorkspaceIds.includes(workspaceId)) return json({ error: "You do not own this workspace" }, 403);
-      const joinCode = crypto.randomUUID();
-      await rest(`questdeck_workspace_join_codes?workspace_id=eq.${encodeURIComponent(workspaceId)}`, {
-        method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ join_code: joinCode, rotated_at: new Date().toISOString() }),
-      });
-      return json({ ok: true, workspaceId, joinCode });
+    if (action === "clear_waiting_requests") {
+      if (!ownerOnly(context)) return json({ error: "Only owners can clear the waiting list" }, 403);
+      const pending = await rest("questdeck_membership_requests?select=id&status=eq.Pending");
+      await rest("questdeck_membership_requests?status=eq.Pending", { method: "DELETE" });
+      return json({ ok: true, cleared: pending?.length ?? 0 });
     }
 
     if (action === "load_admin") {
