@@ -197,6 +197,12 @@ test("includes private spreadsheets with formulas, CSV, and row-to-card actions"
   assert.match(spreadsheet, /Column .* width in pixels/);
   assert.match(spreadsheet, /type="number" min="40" max="600"/);
   assert.match(spreadsheet, /type="number" min="20" max="300"/);
+  assert.match(spreadsheet, /selectedRange/);
+  assert.match(spreadsheet, /beginCellSelection/);
+  assert.match(spreadsheet, /extendCellSelection/);
+  assert.match(spreadsheet, /selectedCellIds/);
+  assert.match(spreadsheet, /<textarea rows=\{1\}/);
+  assert.match(spreadsheet, /charactersPerLine/);
   assert.match(spreadsheet, /type="color"/);
   assert.match(spreadsheet, /CellBorder/);
   assert.match(css, /\.spreadsheet-grid/);
@@ -205,6 +211,8 @@ test("includes private spreadsheets with formulas, CSV, and row-to-card actions"
   assert.match(css, /\.spreadsheet-formatbar/);
   assert.match(css, /\.spreadsheet-size-group/);
   assert.match(css, /\.spreadsheet-pixel-input/);
+  assert.match(css, /\.spreadsheet-grid td\.range-selected/);
+  assert.match(css, /overflow-wrap:anywhere/);
 });
 
 test("scopes workspace access and includes the Team Leader role", async () => {
