@@ -1,0 +1,94 @@
+.role-cards {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.matrix-row {
+  grid-template-columns: 1.5fr repeat(5, 1fr);
+}
+
+.workspace-assignment-fieldset {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #e1dcea;
+  border-radius: 12px;
+  background: #faf9fc;
+}
+
+.workspace-assignment-fieldset legend {
+  padding: 0 6px;
+  color: #50485b;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.workspace-assignment-fieldset > p {
+  margin: 0 0 10px;
+  color: #8d8697;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.workspace-assignment-fieldset > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workspace-assignment-fieldset label {
+  display: grid;
+  grid-template-columns: 18px 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #e4dfeb;
+  border-radius: 9px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.workspace-assignment-fieldset label:has(input:checked) {
+  border-color: #a995e9;
+  background: #f3efff;
+  color: #6048c5;
+}
+
+.workspace-assignment-fieldset input {
+  width: 15px;
+  height: 15px;
+  accent-color: #7356df;
+}
+
+.workspace-assignment-fieldset label > span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #2d2938;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.workspace-assignment-fieldset label > b {
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-membership-summary {
+  color: #6e54cf !important;
+  font-weight: 800;
+}
+
+@media (max-width: 700px) {
+  .matrix-row {
+    grid-template-columns: 1.5fr repeat(5, .7fr);
+  }
+
+  .workspace-assignment-fieldset > div {
+    grid-template-columns: 1fr;
+  }
+}

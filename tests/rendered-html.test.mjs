@@ -150,3 +150,23 @@ test("includes a private, persistent infinite mindmap canvas", async () => {
   assert.match(css, /\.mindmap-library/);
   assert.match(css, /\.mindmap-node-tools/);
 });
+
+test("scopes workspace access and includes the Team Leader role", async () => {
+  const [page, accessCss, migration, syncFunction] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/workspace-access.css", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202608200004_workspace_membership_scoping.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/questdeck-sync/index.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /"Team Leader"/);
+  assert.match(page, /workspaceIds/);
+  assert.match(page, /workspace-assignment-fieldset/);
+  assert.match(page, /isWorkspaceOwner/);
+  assert.match(accessCss, /workspace-assignment-fieldset/);
+  assert.match(migration, /questdeck_workspace_memberships/);
+  assert.match(migration, /has_questdeck_workspace_access/);
+  assert.match(migration, /workspace_id text not null/);
+  assert.match(syncFunction, /Only owners can create workspaces/);
+  assert.match(syncFunction, /Only owners can assign workspace access/);
+  assert.match(syncFunction, /workspace_id=eq/);
+});
