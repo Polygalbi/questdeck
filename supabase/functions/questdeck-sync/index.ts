@@ -63,8 +63,10 @@ async function caller(request: Request, requestedWorkspaceId: string, allowWorks
   }
   if (!member || member.status !== "Active") return null;
   const ownerAccount = (await rest(`questdeck_owner_accounts?select=status&member_id=eq.${member.id}&limit=1`))?.[0] ?? null;
-  if (ownerAccount?.status === "Suspended") return null;
-  const memberships = await rest(`questdeck_workspace_memberships?select=workspace_id,role,discipline&member_id=eq.${member.id}&order=created_at.asc`);
+  const allMemberships = await rest(`questdeck_workspace_memberships?select=workspace_id,role,discipline&member_id=eq.${member.id}&order=created_at.asc`);
+  const memberships = ownerAccount?.status === "Suspended"
+    ? (allMemberships ?? []).filter((item: any) => item.role !== "Owner")
+    : allMemberships;
   if (!memberships?.length) return null;
   const requestedMembership = memberships.find((item: any) => item.workspace_id === requestedWorkspaceId);
   if (requestedWorkspaceId && !requestedMembership && !allowWorkspaceFallback) return null;
@@ -117,8 +119,6 @@ async function waitingRoomEligible(request: Request) {
   if (!user) return false;
   const member = (await rest(`questdeck_members?select=id,status&email=ilike.${encodeURIComponent(user.email)}&limit=1`))?.[0] ?? null;
   if (!member) return true;
-  const ownerAccount = (await rest(`questdeck_owner_accounts?select=status&member_id=eq.${member.id}&limit=1`))?.[0] ?? null;
-  if (ownerAccount?.status === "Suspended") return false;
   const membership = (await rest(`questdeck_workspace_memberships?select=id&member_id=eq.${member.id}&limit=1`))?.[0] ?? null;
   return !membership;
 }
@@ -333,13 +333,20 @@ Deno.serve(async (request) => {
       const memberId = Number(body.memberId);
       const status = body.status === "Suspended" ? "Suspended" : "Active";
       if (!Number.isSafeInteger(memberId)) return json({ error: "Invalid owner" }, 400);
-      const owner = (await rest(`questdeck_members?select=id,email&id=eq.${memberId}&limit=1`))?.[0];
+      const owner = (await rest(`questdeck_members?select=id,email,name,auth_user_id&id=eq.${memberId}&limit=1`))?.[0];
       if (!owner) return json({ error: "Owner not found" }, 404);
       if (String(owner.email).toLowerCase() === String(admin.email).toLowerCase() && status === "Suspended") return json({ error: "You cannot suspend your own owner account" }, 400);
+      if (status === "Suspended") {
+        const result = await rest("rpc/suspend_questdeck_owner", {
+          method: "POST",
+          body: JSON.stringify({ target_member_id: memberId }),
+        });
+        return json({ ok: true, memberId, status, ...result });
+      }
       await rest(`questdeck_owner_accounts?member_id=eq.${memberId}`, {
         method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status, updated_at: new Date().toISOString() }),
       });
-      return json({ ok: true, memberId, status });
+      return json({ ok: true, memberId, status, waitingListAdded: false, deletedWorkspaceCount: 0 });
     }
 
     if (!context) return json({ error: "Workspace access required" }, 403);

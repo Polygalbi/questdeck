@@ -236,10 +236,11 @@ test("scopes workspace access and includes the Team Leader role", async () => {
 });
 
 test("isolates owner tenants and provides content-blind platform administration", async () => {
-  const [page, portal, migration, syncFunction, proxy] = await Promise.all([
+  const [page, portal, migration, suspensionMigration, syncFunction, proxy] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/platform-admin.tsx", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/202608200006_owner_tenant_isolation.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202608200009_suspend_owner_to_waiting.sql", import.meta.url), "utf8"),
     readFile(new URL("../supabase/functions/questdeck-sync/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/questdeck-sync/route.ts", import.meta.url), "utf8"),
   ]);
@@ -261,6 +262,11 @@ test("isolates owner tenants and provides content-blind platform administration"
   assert.match(syncFunction, /shared\.filter\(\(membership: any\) => membership\.role !== "Owner"\)/);
   assert.match(syncFunction, /An owner cannot be removed from a workspace they own/);
   assert.match(syncFunction, /workspaceCount/);
+  assert.match(syncFunction, /rpc\/suspend_questdeck_owner/);
+  assert.match(portal, /move to the waiting list and lose all workspace access/);
+  assert.match(suspensionMigration, /delete_questdeck_ownerless_workspace/);
+  assert.match(suspensionMigration, /not exists[\s\S]*membership\.role = 'Owner'/);
+  assert.match(suspensionMigration, /on conflict \(auth_user_id\) do update/);
   assert.doesNotMatch(proxy, /questdeck_members\?select=id/);
 });
 

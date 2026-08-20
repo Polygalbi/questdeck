@@ -76,15 +76,17 @@ export default function PlatformAdmin({ session, embedded = true, language, onTo
     }
   }
 
-  async function setOwnerStatus(owner: OwnerSummary) {
-    const status = owner.status === "Active" ? "Suspended" : "Active";
-    if (status === "Suspended" && !window.confirm(tr(`Suspend ${owner.name}? They will immediately lose workspace access.`, `${owner.name} 계정을 일시 중지할까요? 워크스페이스 접근 권한이 즉시 차단됩니다.`))) return;
+  async function suspendOwner(owner: OwnerSummary) {
+    if (owner.status === "Suspended") return;
+    if (!window.confirm(tr(`Suspend ${owner.name}? They will move to the waiting list and lose all workspace access. Any workspace without another Owner will be permanently deleted.`, `${owner.name} 계정을 중지할까요? 이 사용자는 대기 명단으로 이동하고 모든 워크스페이스 접근 권한을 잃습니다. 다른 소유자가 없는 워크스페이스는 영구 삭제됩니다.`))) return;
     setBusy(true);
     setError("");
     try {
-      await request("set_owner_status", { memberId: owner.id, status });
-      setOwners(current => current.map(item => item.id === owner.id ? { ...item, status } : item));
-      onToast(status === "Active" ? tr("Owner activated", "소유자를 활성화했습니다") : tr("Owner suspended", "소유자를 일시 중지했습니다"));
+      const result = await request<{ waitingListAdded: boolean; deletedWorkspaceCount: number }>("set_owner_status", { memberId: owner.id, status: "Suspended" });
+      setOwners(current => current.map(item => item.id === owner.id ? { ...item, status: "Suspended", workspaceCount: 0 } : item));
+      const waitingMessage = result.waitingListAdded ? tr("moved to the waiting list", "대기 명단으로 이동") : tr("will enter the waiting room after signing in", "로그인 후 대기실로 이동");
+      const deletedMessage = result.deletedWorkspaceCount ? tr(`; ${result.deletedWorkspaceCount} ownerless workspace deleted`, `; 소유자 없는 워크스페이스 ${result.deletedWorkspaceCount}개 삭제`) : "";
+      onToast(`${owner.name}: ${waitingMessage}${deletedMessage}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : tr("Could not update owner", "소유자를 업데이트하지 못했습니다"));
     } finally {
@@ -110,7 +112,7 @@ export default function PlatformAdmin({ session, embedded = true, language, onTo
           <span>{owner.name.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase()}</span>
           <div><b>{owner.name}</b><small>{owner.email}</small><em>{owner.workspaceCount} {tr(owner.workspaceCount === 1 ? "private workspace" : "private workspaces", "개 비공개 워크스페이스")}</em></div>
           <i>{tr(owner.status, owner.status === "Active" ? "활성" : "일시 중지")}</i>
-          <button disabled={busy} onClick={() => void setOwnerStatus(owner)}>{owner.status === "Active" ? tr("Suspend", "중지") : tr("Activate", "활성화")}</button>
+          <button disabled={busy || owner.status === "Suspended"} onClick={() => void suspendOwner(owner)}>{owner.status === "Active" ? tr("Suspend", "중지") : tr("In waiting list", "대기 명단")}</button>
         </article>)}{owners.length === 0 && <p className="owner-loading">{tr("No owner accounts yet.", "아직 소유자 계정이 없습니다.")}</p>}</div>}
       </section>
 
