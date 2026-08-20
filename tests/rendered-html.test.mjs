@@ -92,4 +92,9 @@ test("includes persistent Hero Cards, sub-cards, and Journey templates", async (
   assert.match(page, /Show sub-cards/);
   assert.match(css, /\.hero-tree-toggle/);
   assert.match(css, /\.column-cards>\.quest-card\.hero-sub-card/);
+  assert.match(page, /timeline-hero-bar/);
+  assert.match(page, /timeline-sub-card-bar/);
+  assert.match(page, /timeline-hero-steps/);
+  assert.match(css, /\.timeline-journey-badge/);
+  assert.match(css, /\.timeline-tooltip-journey/);
 });
