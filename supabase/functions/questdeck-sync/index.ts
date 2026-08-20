@@ -726,14 +726,16 @@ Deno.serve(async (request) => {
       const existing = (await rest(`questdeck_members?select=id,auth_user_id&id=eq.${memberId}&limit=1`))?.[0];
       if (!existing) return json({ error: "Member not found" }, 404);
       const existingMemberships = await rest(`questdeck_workspace_memberships?select=workspace_id,role&member_id=eq.${memberId}`);
-      if ((existingMemberships ?? []).some((membership: any) => membership.role === "Owner") || existing.auth_user_id === context.member.auth_user_id) return json({ error: "Owners and your own membership cannot be removed" }, 400);
+      if (existing.auth_user_id === context.member.auth_user_id) return json({ error: "Your own membership cannot be removed" }, 400);
       const shared = (existingMemberships ?? []).filter((membership: any) => context.ownedWorkspaceIds.includes(String(membership.workspace_id)));
       if (!shared.length) return json({ error: "Member is outside your workspaces" }, 403);
-      await rest(`questdeck_workspace_memberships?member_id=eq.${memberId}&workspace_id=in.(${shared.map((item: any) => `"${String(item.workspace_id).replaceAll('"', '')}"`).join(",")})`, { method: "DELETE" });
+      const removable = shared.filter((membership: any) => membership.role !== "Owner");
+      if (!removable.length) return json({ error: "An owner cannot be removed from a workspace they own" }, 400);
+      await rest(`questdeck_workspace_memberships?member_id=eq.${memberId}&workspace_id=in.(${removable.map((item: any) => `"${String(item.workspace_id).replaceAll('"', '')}"`).join(",")})`, { method: "DELETE" });
       const remaining = await rest(`questdeck_workspace_memberships?select=id&member_id=eq.${memberId}&limit=1`);
       if (!(remaining?.length)) await rest(`questdeck_members?id=eq.${memberId}`, { method: "DELETE" });
-      await recordActivity(context, { action: "removed member", target: `Member #${memberId}`, detail: "Workspace access removed", eventType: "Team", tone: "coral", destination: "roles" });
-      return json({ ok: true });
+      await recordActivity(context, { action: "removed member", target: `Member #${memberId}`, detail: `Removed from ${removable.length} workspace${removable.length === 1 ? "" : "s"}`, eventType: "Team", tone: "coral", destination: "roles" });
+      return json({ ok: true, removedWorkspaceIds: removable.map((item: any) => String(item.workspace_id)) });
     }
 
     if (action === "update_role_permissions") {

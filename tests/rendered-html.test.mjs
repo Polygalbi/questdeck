@@ -258,6 +258,8 @@ test("isolates owner tenants and provides content-blind platform administration"
   assert.match(syncFunction, /membership\.role === "Owner"/);
   assert.match(syncFunction, /ownedWorkspaceIds\.includes\(workspaceId\)/);
   assert.match(syncFunction, /Owner accounts are managed in Owner administration/);
+  assert.match(syncFunction, /shared\.filter\(\(membership: any\) => membership\.role !== "Owner"\)/);
+  assert.match(syncFunction, /An owner cannot be removed from a workspace they own/);
   assert.match(syncFunction, /workspaceCount/);
   assert.doesNotMatch(proxy, /questdeck_members\?select=id/);
 });
