@@ -173,6 +173,29 @@ test("includes private multi-chart flowcharts with shapes and card creation", as
   assert.match(css, /\.flowchart-library/);
 });
 
+test("includes private spreadsheets with formulas, CSV, and row-to-card actions", async () => {
+  const [page, spreadsheet, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/spreadsheet-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/spreadsheet-studio.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /view === "spreadsheet"/);
+  assert.match(page, /isSpreadsheetDocument/);
+  assert.match(spreadsheet, /__questdeck_spreadsheet_v1__/);
+  assert.match(spreadsheet, /Spreadsheet studio/);
+  assert.match(spreadsheet, /SUM\|AVERAGE\|AVG\|COUNT/);
+  assert.match(spreadsheet, /parseCsv/);
+  assert.match(spreadsheet, /exportCsv/);
+  assert.match(spreadsheet, /createCardFromRow/);
+  assert.match(spreadsheet, /addRow/);
+  assert.match(spreadsheet, /addColumn/);
+  assert.match(spreadsheet, /deleteSelectedRow/);
+  assert.match(spreadsheet, /deleteSelectedColumn/);
+  assert.match(css, /\.spreadsheet-grid/);
+  assert.match(css, /\.spreadsheet-formula/);
+  assert.match(css, /\.spreadsheet-library/);
+});
+
 test("scopes workspace access and includes the Team Leader role", async () => {
   const [page, accessCss, migration, syncFunction] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),

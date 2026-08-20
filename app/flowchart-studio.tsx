@@ -43,6 +43,7 @@ function parse(content: string): FlowData | null {
     return { version: 1, nodes: value.nodes as FlowNode[], edges: value.edges as FlowEdge[] };
   } catch { return null; }
 }
+export function flowchartImagePaths(content: string) { return (parse(content)?.nodes ?? []).map(node => node.imagePath ?? "").filter(path => imagePathPattern.test(path)); }
 
 function mapDocument(document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }): FlowchartDocument {
   return { id: document.id, title: document.title, content: document.content, createdByEmail: document.created_by_email, ownerName: document.owner_name, isPublished: document.is_published, shareSlug: document.share_slug, createdAt: document.created_at, updatedAt: document.updated_at };

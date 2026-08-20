@@ -2,11 +2,13 @@
 
 import { ChangeEvent, DragEvent, FormEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
-import FlowchartStudio, { isFlowchartDocument } from "./flowchart-studio";
+import FlowchartStudio, { flowchartImagePaths, isFlowchartDocument } from "./flowchart-studio";
+import SpreadsheetStudio, { isSpreadsheetDocument } from "./spreadsheet-studio";
 import "./workspace-access.css";
+import "./spreadsheet-studio.css";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "timeline" | "mindmap" | "flowchart" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
+type View = "overview" | "quests" | "timeline" | "mindmap" | "flowchart" | "spreadsheet" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; collaborators?: string[]; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null; startDate?: string | null; archived?: boolean };
 type Account = { displayName: string; email: string; fullName: string | null };
 type RoleName = "Owner" | "Admin" | "Team Leader" | "Member" | "Guest";
@@ -193,7 +195,7 @@ const permissionRows: { key: PermissionKey; english: string; korean: string }[] 
 const initialActivityEvents: ActivityEvent[] = [];
 
 function isView(value: string): value is View {
-  return ["overview", "quests", "timeline", "mindmap", "flowchart", "documents", "milestones", "activity", "management", "projects-management", "roles", "account"].includes(value);
+  return ["overview", "quests", "timeline", "mindmap", "flowchart", "spreadsheet", "documents", "milestones", "activity", "management", "projects-management", "roles", "account"].includes(value);
 }
 
 function isMindmapDocument(document: WorkspaceDocument) { return document.content.startsWith(MINDMAP_DOCUMENT_PREFIX); }
@@ -806,7 +808,7 @@ export default function Home() {
       const imagePaths = Array.from(new Set(documents.flatMap(document => {
         const documentPaths = Array.from(document.content.matchAll(/data-storage-path=["']([^"']+)["']/g)).map(match => match[1]);
         const mindmapPaths = (parseMindmap(document.content)?.nodes ?? []).map(node => node.imagePath ?? "");
-        return [...documentPaths, ...mindmapPaths].filter(path => documentImagePathPattern.test(path));
+        return [...documentPaths, ...mindmapPaths, ...flowchartImagePaths(document.content)].filter(path => documentImagePathPattern.test(path));
       })));
       const attachments: WorkspaceBackupAttachment[] = [];
       if (imagePaths.length) {
@@ -2241,7 +2243,7 @@ export default function Home() {
   const overviewUpcomingCards = overviewActionCards.filter(card => card.dueDate && new Date(`${card.dueDate}T12:00:00`) >= overviewToday && new Date(`${card.dueDate}T12:00:00`) <= overviewWeekEnd).sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? "") || b.priority - a.priority).slice(0, 4);
   const overviewUrgentCards = overviewActionCards.filter(card => card.priority >= 8 || (card.dueDate && new Date(`${card.dueDate}T23:59:59`) < new Date())).sort((a, b) => Number(cardDueTone(a) !== "due-overdue") - Number(cardDueTone(b) !== "due-overdue") || b.priority - a.priority || (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999")).slice(0, 4);
   const recentPulseEvents = [...activityEvents].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 3);
-  const regularDocuments = documents.filter(document => !isMindmapDocument(document) && !isFlowchartDocument(document));
+  const regularDocuments = documents.filter(document => !isMindmapDocument(document) && !isFlowchartDocument(document) && !isSpreadsheetDocument(document));
   const mindmapDocuments = documents.filter(isMindmapDocument).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   const activeMindmapDocument = mindmapDocuments.find(document => document.id === activeMindmapDocumentId) ?? null;
   const selectedMindmapNode = mindmapNodes.find(node => node.id === selectedMindmapNodeId) ?? null;
@@ -2574,6 +2576,7 @@ export default function Home() {
         <button className={`nav-item ${view === "timeline" ? "active" : ""}`} onClick={() => setView("timeline")}><span>↔</span> {tr("Timeline", "타임라인")}</button>
         <button className={`nav-item ${view === "mindmap" ? "active" : ""}`} onClick={() => setView("mindmap")}><span>⌘</span> {tr("Mindmap", "마인드맵")}</button>
         <button className={`nav-item ${view === "flowchart" ? "active" : ""}`} onClick={() => setView("flowchart")}><span>⇢</span> {tr("Flowchart", "플로차트")}</button>
+        <button className={`nav-item ${view === "spreadsheet" ? "active" : ""}`} onClick={() => setView("spreadsheet")}><span>▦</span> {tr("Spreadsheet", "스프레드시트")}</button>
         <button className={`nav-item ${view === "documents" ? "active" : ""}`} onClick={() => setView("documents")}><span>▧</span> {tr("Documents", "문서")} <i>{regularDocuments.length}</i></button>
         <button className={`nav-item ${view === "milestones" ? "active" : ""}`} onClick={() => setView("milestones")}><span>◎</span> {tr("Milestones", "마일스톤")}</button>
         <p className="nav-label">{tr("MANAGE", "관리")}</p>
@@ -2715,6 +2718,8 @@ export default function Home() {
       </div>}
 
       {view === "flowchart" && <FlowchartStudio documents={documents} setDocuments={setDocuments} session={session} activeWorkspaceId={activeWorkspaceId} accountName={accountName} accountEmail={accountEmail ?? ""} canEdit={Boolean(session && currentPermissions?.edit_cards)} language={language} setToast={setToast} onCreateCard={(title, description) => openCreateCard("Ready", { title, description })} />}
+
+      {view === "spreadsheet" && <SpreadsheetStudio documents={documents} setDocuments={setDocuments} session={session} activeWorkspaceId={activeWorkspaceId} accountName={accountName} accountEmail={accountEmail ?? ""} canEdit={Boolean(session && currentPermissions?.edit_cards)} language={language} setToast={setToast} onCreateCard={(title, description) => openCreateCard("Ready", { title, description })} />}
 
       {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Create rich team documents with autosave, discussion, and shareable links.", "자동 저장, 토론, 공유 링크를 지원하는 팀 문서를 만드세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void createBlankDocument()}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{regularDocuments.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{richTextExcerpt(document.content).slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => openDocumentEditor(document)}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{regularDocuments.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
 
