@@ -263,3 +263,27 @@ test("isolates owner tenants and provides content-blind platform administration"
   assert.match(syncFunction, /workspaceCount/);
   assert.doesNotMatch(proxy, /questdeck_members\?select=id/);
 });
+
+test("keeps first-time members in a tenant-scoped owner waiting room", async () => {
+  const [page, waitingRoom, waitingCss, migration, syncFunction] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/waiting-room.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/waiting-room.css", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202608200007_workspace_waiting_room.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/questdeck-sync/index.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /workspaceAccess === "waiting"/);
+  assert.match(page, /Member waiting list/);
+  assert.match(waitingRoom, /No workspace names, projects, cards, documents, or member information are visible/);
+  assert.match(waitingRoom, /request_workspace_access/);
+  assert.match(waitingRoom, /approve_waiting_request/);
+  assert.match(waitingRoom, /decline_waiting_request/);
+  assert.match(waitingRoom, /rotate_join_code/);
+  assert.match(waitingRoom, /Other owners cannot see these requests/);
+  assert.match(waitingCss, /waiting-room-page/);
+  assert.match(migration, /questdeck_workspace_join_codes/);
+  assert.match(migration, /questdeck_membership_requests/);
+  assert.match(migration, /revoke all on public\.questdeck_membership_requests from anon, authenticated/);
+  assert.match(syncFunction, /Only owners can manage the waiting list/);
+  assert.match(syncFunction, /context\.ownedWorkspaceIds\.includes\(String\(pending\.target_workspace_id\)\)/);
+});

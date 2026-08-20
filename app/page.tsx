@@ -5,11 +5,12 @@ import { createClient, type Session } from "@supabase/supabase-js";
 import FlowchartStudio, { flowchartImagePaths, isFlowchartDocument } from "./flowchart-studio";
 import SpreadsheetStudio, { isSpreadsheetDocument } from "./spreadsheet-studio";
 import PlatformAdmin from "./platform-admin";
+import { OwnerWaitingList, WaitingRoom } from "./waiting-room";
 import "./workspace-access.css";
 import "./spreadsheet-studio.css";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "timeline" | "mindmap" | "flowchart" | "spreadsheet" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account" | "platform-admin";
+type View = "overview" | "quests" | "timeline" | "mindmap" | "flowchart" | "spreadsheet" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account" | "platform-admin" | "waiting-list";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; collaborators?: string[]; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null; startDate?: string | null; archived?: boolean };
 type Account = { displayName: string; email: string; fullName: string | null };
 type RoleName = "Owner" | "Admin" | "Team Leader" | "Member" | "Guest";
@@ -196,7 +197,7 @@ const permissionRows: { key: PermissionKey; english: string; korean: string }[] 
 const initialActivityEvents: ActivityEvent[] = [];
 
 function isView(value: string): value is View {
-  return ["overview", "quests", "timeline", "mindmap", "flowchart", "spreadsheet", "documents", "milestones", "activity", "management", "projects-management", "roles", "account", "platform-admin"].includes(value);
+  return ["overview", "quests", "timeline", "mindmap", "flowchart", "spreadsheet", "documents", "milestones", "activity", "management", "projects-management", "roles", "account", "platform-admin", "waiting-list"].includes(value);
 }
 
 function isMindmapDocument(document: WorkspaceDocument) { return document.content.startsWith(MINDMAP_DOCUMENT_PREFIX); }
@@ -429,7 +430,8 @@ export default function Home() {
   const [collapsedHeroIds, setCollapsedHeroIds] = useState<Set<number>>(() => new Set());
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [workspaceAccess, setWorkspaceAccess] = useState<"checking" | "allowed" | "admin" | "denied">("checking");
+  const [workspaceAccess, setWorkspaceAccess] = useState<"checking" | "allowed" | "admin" | "waiting" | "denied">("checking");
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
   const [authOpen, setAuthOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [nameEditorOpen, setNameEditorOpen] = useState(false);
@@ -523,11 +525,12 @@ export default function Home() {
       return;
     }
     setWorkspaceAccess("checking");
-    void syncQuestdeck<{ hasWorkspaceAccess: boolean; isPlatformAdmin: boolean; activeWorkspaceId: string | null }>("load_access", {}, session.access_token)
+    void syncQuestdeck<{ hasWorkspaceAccess: boolean; isPlatformAdmin: boolean; isWaiting: boolean; pendingRequestCount: number; activeWorkspaceId: string | null }>("load_access", {}, session.access_token)
       .then(data => {
         setIsPlatformAdmin(data.isPlatformAdmin);
+        setPendingRequestCount(data.pendingRequestCount || 0);
         if (data.activeWorkspaceId) setActiveWorkspaceId(data.activeWorkspaceId);
-        setWorkspaceAccess(data.hasWorkspaceAccess ? "allowed" : data.isPlatformAdmin ? "admin" : "denied");
+        setWorkspaceAccess(data.hasWorkspaceAccess ? "allowed" : data.isPlatformAdmin ? "admin" : data.isWaiting ? "waiting" : "denied");
       })
       .catch(() => { setIsPlatformAdmin(false); setWorkspaceAccess("denied"); });
   }, [session?.access_token, session?.user.email]);
@@ -2569,6 +2572,8 @@ export default function Home() {
 
   if (workspaceAccess === "admin") return <PlatformAdmin session={session} embedded={false} language={language} onToast={setToast} onSignOut={() => void supabase.auth.signOut()} />;
 
+  if (workspaceAccess === "waiting") return <WaitingRoom session={session} language={language} pendingRequestCount={pendingRequestCount} onSignOut={() => void supabase.auth.signOut()} />;
+
   if (workspaceAccess === "denied") return <main className="private-auth-page"><section className="private-auth-card private-access-denied"><header><span className="brand-mark">Q</span><b>Questdeck</b></header><span className="private-lock">⌾</span><small>{tr("ACCESS RESTRICTED", "접근 제한")}</small><h1>{tr("This account is not a workspace member", "이 계정은 워크스페이스 멤버가 아닙니다")}</h1><p>{session.user.email}</p><p>{tr("Ask a workspace owner to add this email as an active member.", "워크스페이스 소유자에게 이 이메일을 활성 멤버로 추가해 달라고 요청하세요.")}</p><button className="secondary-button" onClick={() => void supabase.auth.signOut()}>{tr("Sign out", "로그아웃")}</button></section></main>;
 
   if (publicDocumentLoading) return <main className="shared-document-page"><section className="shared-document"><span className="brand-mark">Q</span><p>{tr("Loading shared document…", "공유 문서를 불러오는 중…")}</p></section></main>;
@@ -2592,6 +2597,7 @@ export default function Home() {
         <button className={`nav-item ${view === "management" ? "active" : ""}`} onClick={() => setView("management")}><span>⚙</span> {tr("Workspace", "워크스페이스")}</button>
         <button className={`nav-item ${view === "projects-management" ? "active" : ""}`} onClick={() => setView("projects-management")}><span>▦</span> {tr("Projects", "프로젝트")}</button>
         <button className={`nav-item ${view === "roles" ? "active" : ""}`} onClick={() => setView("roles")}><span>♙</span> {tr("Roles & access", "역할 및 권한")}</button>
+        {isWorkspaceOwner && <button className={`nav-item ${view === "waiting-list" ? "active" : ""}`} onClick={() => setView("waiting-list")}><span>◷</span> {tr("Member waiting list", "멤버 대기 명단")}</button>}
         {isPlatformAdmin && <button className={`nav-item ${view === "platform-admin" ? "active" : ""}`} onClick={() => setView("platform-admin")}><span>⌾</span> {tr("Owner administration", "소유자 관리")}</button>}
         <button className={`nav-item ${view === "account" ? "active" : ""}`} onClick={() => setView("account")}><span>◉</span> {tr("My account", "내 계정")}</button>
         <p className="nav-label">{tr("PROJECTS", "프로젝트")}</p>
@@ -2743,6 +2749,8 @@ export default function Home() {
       </div>}
 
       {view === "platform-admin" && isPlatformAdmin && <PlatformAdmin session={session} language={language} onToast={setToast} />}
+
+      {view === "waiting-list" && isWorkspaceOwner && <OwnerWaitingList session={session} language={language} activeWorkspaceId={activeWorkspaceId} disciplines={disciplines} onToast={setToast} />}
 
       {view === "management" && <div className="content manage-content">
         <div className="page-title"><div><p>{tr("WORKSPACE ADMIN", "워크스페이스 관리")}</p><h1>{tr("Manage", "관리")} {studioName}</h1><h2>{tr("Control your team, permissions, and workspace defaults.", "팀, 권한, 워크스페이스 기본값을 관리하세요.")}</h2></div><button className="create-button" disabled={!isWorkspaceOwner} onClick={() => setInviteOpen(true)}>＋ {tr("Add member", "멤버 추가")}</button></div>
