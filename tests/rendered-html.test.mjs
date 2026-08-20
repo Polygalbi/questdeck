@@ -234,3 +234,30 @@ test("scopes workspace access and includes the Team Leader role", async () => {
   assert.match(syncFunction, /Only owners can assign workspace access/);
   assert.match(syncFunction, /workspace_id=eq/);
 });
+
+test("isolates owner tenants and provides content-blind platform administration", async () => {
+  const [page, portal, migration, syncFunction, proxy] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform-admin.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202608200006_owner_tenant_isolation.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/questdeck-sync/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/questdeck-sync/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /platform-admin/);
+  assert.match(page, /load_access/);
+  assert.match(portal, /Content-blind/);
+  assert.match(portal, /there is no shared admin password/);
+  assert.match(portal, /load_platform_owners/);
+  assert.match(portal, /provision_owner/);
+  assert.match(portal, /set_owner_status/);
+  assert.match(migration, /questdeck_platform_admins/);
+  assert.match(migration, /questdeck_owner_accounts/);
+  assert.match(migration, /questdeck_workspace_role_permissions/);
+  assert.match(migration, /is_questdeck_workspace_owner/);
+  assert.doesNotMatch(migration.match(/create policy questdeck_members_shared_workspace_read[\s\S]*?\);/)?.[0] ?? "", /is_questdeck_owner/);
+  assert.match(syncFunction, /membership\.role === "Owner"/);
+  assert.match(syncFunction, /ownedWorkspaceIds\.includes\(workspaceId\)/);
+  assert.match(syncFunction, /Owner accounts are managed in Owner administration/);
+  assert.match(syncFunction, /workspaceCount/);
+  assert.doesNotMatch(proxy, /questdeck_members\?select=id/);
+});

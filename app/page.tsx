@@ -4,11 +4,12 @@ import { ChangeEvent, DragEvent, FormEvent, PointerEvent as ReactPointerEvent, W
 import { createClient, type Session } from "@supabase/supabase-js";
 import FlowchartStudio, { flowchartImagePaths, isFlowchartDocument } from "./flowchart-studio";
 import SpreadsheetStudio, { isSpreadsheetDocument } from "./spreadsheet-studio";
+import PlatformAdmin from "./platform-admin";
 import "./workspace-access.css";
 import "./spreadsheet-studio.css";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "timeline" | "mindmap" | "flowchart" | "spreadsheet" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
+type View = "overview" | "quests" | "timeline" | "mindmap" | "flowchart" | "spreadsheet" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account" | "platform-admin";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; collaborators?: string[]; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null; startDate?: string | null; archived?: boolean };
 type Account = { displayName: string; email: string; fullName: string | null };
 type RoleName = "Owner" | "Admin" | "Team Leader" | "Member" | "Guest";
@@ -195,7 +196,7 @@ const permissionRows: { key: PermissionKey; english: string; korean: string }[] 
 const initialActivityEvents: ActivityEvent[] = [];
 
 function isView(value: string): value is View {
-  return ["overview", "quests", "timeline", "mindmap", "flowchart", "spreadsheet", "documents", "milestones", "activity", "management", "projects-management", "roles", "account"].includes(value);
+  return ["overview", "quests", "timeline", "mindmap", "flowchart", "spreadsheet", "documents", "milestones", "activity", "management", "projects-management", "roles", "account", "platform-admin"].includes(value);
 }
 
 function isMindmapDocument(document: WorkspaceDocument) { return document.content.startsWith(MINDMAP_DOCUMENT_PREFIX); }
@@ -399,6 +400,7 @@ export default function Home() {
   const [currentPermissions, setCurrentPermissions] = useState<RolePermissions | null>(null);
   const [currentRole, setCurrentRole] = useState<RoleName | null>(null);
   const [isWorkspaceOwner, setIsWorkspaceOwner] = useState(false);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [memberRoleFilter, setMemberRoleFilter] = useState<RoleName | "All">("All");
   const [projectStatusFilter, setProjectStatusFilter] = useState("All");
   const [projectSearch, setProjectSearch] = useState("");
@@ -427,7 +429,7 @@ export default function Home() {
   const [collapsedHeroIds, setCollapsedHeroIds] = useState<Set<number>>(() => new Set());
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [workspaceAccess, setWorkspaceAccess] = useState<"checking" | "allowed" | "denied">("checking");
+  const [workspaceAccess, setWorkspaceAccess] = useState<"checking" | "allowed" | "admin" | "denied">("checking");
   const [authOpen, setAuthOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [nameEditorOpen, setNameEditorOpen] = useState(false);
@@ -517,14 +519,17 @@ export default function Home() {
   useEffect(() => {
     if (!session?.access_token || !session.user.email) {
       setWorkspaceAccess("checking");
+      setIsPlatformAdmin(false);
       return;
     }
-    const headers = { apikey: SUPABASE_PUBLISHABLE_KEY, authorization: `Bearer ${session.access_token}` };
-    const email = encodeURIComponent(session.user.email);
-    void fetch(`${SUPABASE_URL}/rest/v1/questdeck_members?select=id&email=eq.${email}&status=eq.Active&limit=1`, { headers })
-      .then(response => response.ok ? response.json() : Promise.reject(new Error("Access check failed")))
-      .then((items: Array<{ id: number }>) => setWorkspaceAccess(items.length ? "allowed" : "denied"))
-      .catch(() => setWorkspaceAccess("denied"));
+    setWorkspaceAccess("checking");
+    void syncQuestdeck<{ hasWorkspaceAccess: boolean; isPlatformAdmin: boolean; activeWorkspaceId: string | null }>("load_access", {}, session.access_token)
+      .then(data => {
+        setIsPlatformAdmin(data.isPlatformAdmin);
+        if (data.activeWorkspaceId) setActiveWorkspaceId(data.activeWorkspaceId);
+        setWorkspaceAccess(data.hasWorkspaceAccess ? "allowed" : data.isPlatformAdmin ? "admin" : "denied");
+      })
+      .catch(() => { setIsPlatformAdmin(false); setWorkspaceAccess("denied"); });
   }, [session?.access_token, session?.user.email]);
   useEffect(() => {
     if (!session?.access_token || workspaceAccess !== "allowed") {
@@ -543,6 +548,7 @@ export default function Home() {
       activeWorkspaceId: string;
       currentRole: RoleName;
       isOwner: boolean;
+      isPlatformAdmin: boolean;
     }>("load_admin", { workspaceId: activeWorkspaceId }, session.access_token).then(data => {
       if (data.activeWorkspaceId !== activeWorkspaceId) setActiveWorkspaceId(data.activeWorkspaceId);
       setProjects(data.projects.map(item => ({ id: item.id, name: item.name, count: item.card_count, color: item.color, owner: item.owner, status: item.status, progress: item.progress, updated: item.updated_label })));
@@ -556,6 +562,7 @@ export default function Home() {
       setCurrentPermissions(data.permissions);
       setCurrentRole(data.currentRole);
       setIsWorkspaceOwner(data.isOwner);
+      setIsPlatformAdmin(data.isPlatformAdmin);
     }).catch(error => {
       setCurrentPermissions(null);
       setCurrentRole(null);
@@ -2553,12 +2560,14 @@ export default function Home() {
   if (!session) return <main className="private-auth-page">
     <section className="private-auth-card">
       <header><span className="brand-mark">Q</span><b>Questdeck</b><select value={language} onChange={event => setLanguage(event.target.value as "en" | "ko")} aria-label="Language"><option value="en">EN</option><option value="ko">한국어</option></select></header>
-      <div className="private-auth-hero"><small>{tr("PRIVATE WORKSPACE", "비공개 워크스페이스")}</small><h1>{tr("Sign in to continue", "계속하려면 로그인하세요")}</h1><p>{tr("Questdeck content is available only to invited workspace members.", "Questdeck 콘텐츠는 초대된 워크스페이스 멤버만 볼 수 있습니다.")}</p></div>
+      <div className="private-auth-hero"><small>{tr("PRIVATE WORKSPACE", "비공개 워크스페이스")}</small><h1>{authMode === "signin" ? tr("Sign in to continue", "계속하려면 로그인하세요") : tr("Activate your invited account", "초대받은 계정 활성화")}</h1><p>{tr("Questdeck content is available only to invited workspace members and owners.", "Questdeck 콘텐츠는 초대된 워크스페이스 멤버와 소유자만 볼 수 있습니다.")}</p></div>
       <button className="github-auth-button" type="button" onClick={() => void handleGitHubSignIn()} disabled={authBusy}><span aria-hidden="true">GH</span>{tr("Continue with GitHub", "GitHub로 계속하기")}</button>
       <div className="auth-divider"><span>{tr("or use email", "또는 이메일 사용")}</span></div>
-      <form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete="current-password" placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<button className="create-button private-auth-submit" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : tr("Sign in", "로그인")}</button></form>
+      <form onSubmit={handleAuth}><label>{tr("Email", "이메일")}<input name="email" type="email" required autoFocus autoComplete="email" placeholder="you@example.com" /></label><label>{tr("Password", "비밀번호")}<input name="password" type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder={tr("At least 8 characters", "8자 이상")} /></label>{authMessage && <p className="auth-message">{authMessage}</p>}<button className="create-button private-auth-submit" type="submit" disabled={authBusy}>{authBusy ? tr("Please wait…", "잠시만 기다려주세요…") : authMode === "signin" ? tr("Sign in", "로그인") : tr("Create invited account", "초대 계정 만들기")}</button><button className="private-auth-mode" type="button" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? tr("Invited for the first time? Create your account", "처음 초대받으셨나요? 계정을 만드세요") : tr("I already have an account", "이미 계정이 있어요")}</button></form>
     </section>
   </main>;
+
+  if (workspaceAccess === "admin") return <PlatformAdmin session={session} embedded={false} language={language} onToast={setToast} onSignOut={() => void supabase.auth.signOut()} />;
 
   if (workspaceAccess === "denied") return <main className="private-auth-page"><section className="private-auth-card private-access-denied"><header><span className="brand-mark">Q</span><b>Questdeck</b></header><span className="private-lock">⌾</span><small>{tr("ACCESS RESTRICTED", "접근 제한")}</small><h1>{tr("This account is not a workspace member", "이 계정은 워크스페이스 멤버가 아닙니다")}</h1><p>{session.user.email}</p><p>{tr("Ask a workspace owner to add this email as an active member.", "워크스페이스 소유자에게 이 이메일을 활성 멤버로 추가해 달라고 요청하세요.")}</p><button className="secondary-button" onClick={() => void supabase.auth.signOut()}>{tr("Sign out", "로그아웃")}</button></section></main>;
 
@@ -2583,6 +2592,7 @@ export default function Home() {
         <button className={`nav-item ${view === "management" ? "active" : ""}`} onClick={() => setView("management")}><span>⚙</span> {tr("Workspace", "워크스페이스")}</button>
         <button className={`nav-item ${view === "projects-management" ? "active" : ""}`} onClick={() => setView("projects-management")}><span>▦</span> {tr("Projects", "프로젝트")}</button>
         <button className={`nav-item ${view === "roles" ? "active" : ""}`} onClick={() => setView("roles")}><span>♙</span> {tr("Roles & access", "역할 및 권한")}</button>
+        {isPlatformAdmin && <button className={`nav-item ${view === "platform-admin" ? "active" : ""}`} onClick={() => setView("platform-admin")}><span>⌾</span> {tr("Owner administration", "소유자 관리")}</button>}
         <button className={`nav-item ${view === "account" ? "active" : ""}`} onClick={() => setView("account")}><span>◉</span> {tr("My account", "내 계정")}</button>
         <p className="nav-label">{tr("PROJECTS", "프로젝트")}</p>
         {projects.filter(item => item.status !== "Archived").map(item => <button className="nav-item" key={item.id} onClick={() => { setProject(item.name); setView("quests"); }}><span className={`dot ${item.color}`} /> {item.name}<i>{item.count}</i></button>)}
@@ -2731,6 +2741,8 @@ export default function Home() {
           {sortedMilestones.length === 0 && <div className="empty-projects milestone-empty"><span>◇</span><h3>{tr("No milestones yet", "아직 마일스톤이 없습니다")}</h3><p>{tr("Create your first delivery target to start the roadmap.", "첫 번째 출시 목표를 만들어 로드맵을 시작하세요.")}</p><button className="create-button" onClick={() => openMilestoneEditor()}>＋ {tr("New milestone", "새 마일스톤")}</button></div>}
         </div>
       </div>}
+
+      {view === "platform-admin" && isPlatformAdmin && <PlatformAdmin session={session} language={language} onToast={setToast} />}
 
       {view === "management" && <div className="content manage-content">
         <div className="page-title"><div><p>{tr("WORKSPACE ADMIN", "워크스페이스 관리")}</p><h1>{tr("Manage", "관리")} {studioName}</h1><h2>{tr("Control your team, permissions, and workspace defaults.", "팀, 권한, 워크스페이스 기본값을 관리하세요.")}</h2></div><button className="create-button" disabled={!isWorkspaceOwner} onClick={() => setInviteOpen(true)}>＋ {tr("Add member", "멤버 추가")}</button></div>

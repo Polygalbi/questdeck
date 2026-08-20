@@ -92,3 +92,4 @@
     grid-template-columns: 1fr;
   }
 }
+.private-auth-mode{border:0;background:transparent;color:#6548d8;padding:10px 4px;font-weight:700;cursor:pointer}

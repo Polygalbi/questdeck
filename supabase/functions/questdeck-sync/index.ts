@@ -24,10 +24,32 @@ async function rest(path: string, init: RequestInit = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function caller(request: Request, requestedWorkspaceId: string) {
+function identity(request: Request) {
   const userId = request.headers.get("x-questdeck-user-id")?.trim() ?? "";
   const email = request.headers.get("x-questdeck-user-email")?.trim().toLowerCase() ?? "";
-  if (!userId || !email) return null;
+  return userId && email ? { userId, email } : null;
+}
+
+async function platformAdmin(request: Request) {
+  const user = identity(request);
+  if (!user) return null;
+  const rows = await rest(`questdeck_platform_admins?select=*&email=ilike.${encodeURIComponent(user.email)}&status=eq.Active&limit=1`);
+  const admin = rows?.[0] ?? null;
+  if (admin && !admin.auth_user_id) {
+    await rest(`questdeck_platform_admins?id=eq.${admin.id}`, {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ auth_user_id: user.userId, updated_at: new Date().toISOString() }),
+    });
+    admin.auth_user_id = user.userId;
+  }
+  return admin?.auth_user_id === user.userId ? admin : null;
+}
+
+async function caller(request: Request, requestedWorkspaceId: string, allowWorkspaceFallback = false) {
+  const user = identity(request);
+  if (!user) return null;
+  const { userId, email } = user;
   const rows = await rest(`questdeck_members?select=*&email=ilike.${encodeURIComponent(email)}&limit=1`);
   const member = rows?.[0] ?? null;
   if (member && !member.auth_user_id) {
@@ -40,16 +62,22 @@ async function caller(request: Request, requestedWorkspaceId: string) {
     member.status = "Active";
   }
   if (!member || member.status !== "Active") return null;
-  const memberships = await rest(`questdeck_workspace_memberships?select=workspace_id,role&member_id=eq.${member.id}&order=created_at.asc`);
+  const ownerAccount = (await rest(`questdeck_owner_accounts?select=status&member_id=eq.${member.id}&limit=1`))?.[0] ?? null;
+  if (ownerAccount?.status === "Suspended") return null;
+  const memberships = await rest(`questdeck_workspace_memberships?select=workspace_id,role,discipline&member_id=eq.${member.id}&order=created_at.asc`);
   if (!memberships?.length) return null;
-  const membership = memberships.find((item: any) => item.workspace_id === requestedWorkspaceId) ?? memberships[0];
-  const permissions = (await rest(`questdeck_role_permissions?select=*&role=eq.${encodeURIComponent(membership.role)}&limit=1`))?.[0] ?? null;
+  const requestedMembership = memberships.find((item: any) => item.workspace_id === requestedWorkspaceId);
+  if (requestedWorkspaceId && !requestedMembership && !allowWorkspaceFallback) return null;
+  const membership = requestedMembership ?? memberships[0];
+  const workspacePermissions = (await rest(`questdeck_workspace_role_permissions?select=*&workspace_id=eq.${encodeURIComponent(membership.workspace_id)}&role=eq.${encodeURIComponent(membership.role)}&limit=1`))?.[0] ?? null;
+  const permissions = workspacePermissions ?? (await rest(`questdeck_role_permissions?select=*&role=eq.${encodeURIComponent(membership.role)}&limit=1`))?.[0] ?? null;
   return {
     member,
     memberships,
     workspaceId: String(membership.workspace_id),
     role: String(membership.role),
-    isOwner: memberships.some((item: any) => item.role === "Owner"),
+    isOwner: membership.role === "Owner",
+    ownedWorkspaceIds: memberships.filter((item: any) => item.role === "Owner").map((item: any) => String(item.workspace_id)),
     permissions,
   };
 }
@@ -64,6 +92,24 @@ function ownerOnly(context: any) {
 
 function scoped(path: string, workspaceId: string) {
   return `${path}${path.includes("?") ? "&" : "?"}workspace_id=eq.${encodeURIComponent(workspaceId)}`;
+}
+
+async function seedWorkspacePermissions(workspaceId: string) {
+  const defaults = await rest("questdeck_role_permissions?select=role,view_projects,edit_cards,manage_members,workspace_settings,billing_security");
+  if (!defaults?.length) return;
+  await rest("questdeck_workspace_role_permissions?on_conflict=workspace_id,role", {
+    method: "POST",
+    headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+    body: JSON.stringify(defaults.map((permission: any) => ({
+      workspace_id: workspaceId,
+      role: permission.role,
+      view_projects: permission.view_projects,
+      edit_cards: permission.edit_cards,
+      manage_members: permission.manage_members,
+      workspace_settings: permission.workspace_settings,
+      billing_security: permission.billing_security,
+    }))),
+  });
 }
 
 type ActivityEvent = {
@@ -150,7 +196,105 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json();
     const action = String(body.action ?? "");
-    const context = await caller(request, String(body.workspaceId ?? "").trim());
+    const admin = await platformAdmin(request);
+    const context = await caller(request, String(body.workspaceId ?? "").trim(), action === "load_access");
+
+    if (action === "load_access") {
+      return json({
+        ok: true,
+        hasWorkspaceAccess: Boolean(context),
+        isPlatformAdmin: Boolean(admin),
+        activeWorkspaceId: context?.workspaceId ?? null,
+      });
+    }
+
+    if (action === "load_platform_owners") {
+      if (!admin) return json({ error: "Platform administrator access required" }, 403);
+      const ownerAccounts = await rest("questdeck_owner_accounts?select=member_id,status,created_at&order=created_at.asc");
+      const memberIds = (ownerAccounts ?? []).map((item: any) => Number(item.member_id)).filter(Number.isSafeInteger);
+      const ownerMembers = memberIds.length
+        ? await rest(`questdeck_members?select=id,name,email&id=in.(${memberIds.join(",")})`)
+        : [];
+      const ownerMemberships = memberIds.length
+        ? await rest(`questdeck_workspace_memberships?select=member_id,workspace_id&role=eq.Owner&member_id=in.(${memberIds.join(",")})`)
+        : [];
+      const owners = (ownerAccounts ?? []).map((account: any) => {
+        const member = (ownerMembers ?? []).find((item: any) => Number(item.id) === Number(account.member_id));
+        return {
+          id: Number(account.member_id),
+          name: String(member?.name || "Owner"),
+          email: String(member?.email || ""),
+          status: String(account.status),
+          workspaceCount: (ownerMemberships ?? []).filter((item: any) => Number(item.member_id) === Number(account.member_id)).length,
+          createdAt: String(account.created_at),
+        };
+      });
+      return json({ ok: true, owners });
+    }
+
+    if (action === "provision_owner") {
+      if (!admin) return json({ error: "Platform administrator access required" }, 403);
+      const email = String(body.email ?? "").trim().toLowerCase().slice(0, 320);
+      const name = String(body.name ?? "").trim().slice(0, 120);
+      const workspaceName = String(body.workspaceName ?? "").trim().slice(0, 160);
+      if (!email || !/^\S+@\S+\.\S+$/.test(email) || !name || !workspaceName) return json({ error: "Name, email, and workspace name are required" }, 400);
+      const existingMember = (await rest(`questdeck_members?select=*&email=ilike.${encodeURIComponent(email)}&limit=1`))?.[0] ?? null;
+      if (existingMember) {
+        const existingOwner = (await rest(`questdeck_owner_accounts?select=member_id&member_id=eq.${existingMember.id}&limit=1`))?.[0];
+        if (existingOwner) return json({ error: "This email already has an owner account" }, 409);
+      }
+      const initials = name.split(/\s+/).map(part => part[0]).join("").toUpperCase().slice(0, 4) || "OW";
+      const generatedMemberId = Date.now() * 100 + Math.floor(Math.random() * 100);
+      const memberRecord = existingMember ?? (await rest("questdeck_members", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ id: generatedMemberId, name, email, initials, role: "Owner", discipline: "General", status: "Invited", updated_at: new Date().toISOString() }),
+      }))?.[0];
+      if (!memberRecord?.id) return json({ error: "Owner account could not be created" }, 500);
+      await rest("questdeck_owner_accounts?on_conflict=member_id", {
+        method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({ member_id: memberRecord.id, status: "Active", updated_at: new Date().toISOString() }),
+      });
+      const workspaceId = `owner-${crypto.randomUUID()}`;
+      const workspaceRecord = {
+        id: workspaceId,
+        name: workspaceName,
+        initials: workspaceName.split(/\s+/).map(part => part[0]).join("").toUpperCase().slice(0, 4) || "W",
+        member_count: 1,
+        status: "Active",
+        updated_at: new Date().toISOString(),
+      };
+      await rest("questdeck_workspaces", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(workspaceRecord) });
+      await rest("questdeck_workspace_memberships", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ workspace_id: workspaceId, member_id: memberRecord.id, role: "Owner", discipline: "General", updated_at: new Date().toISOString() }),
+      });
+      await seedWorkspacePermissions(workspaceId);
+      await rest("questdeck_projects", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(cleanProject({ id: `project-${workspaceId}`, name: "General", count: 0, color: "purple", owner: name, status: "Active", progress: 0 }, workspaceId)),
+      });
+      await rest("questdeck_disciplines", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ workspace_id: workspaceId, name: "General", color: "blue-card", updated_at: new Date().toISOString() }),
+      });
+      return json({ ok: true, owner: { id: Number(memberRecord.id), name, email, status: "Active", workspaceCount: 1 } });
+    }
+
+    if (action === "set_owner_status") {
+      if (!admin) return json({ error: "Platform administrator access required" }, 403);
+      const memberId = Number(body.memberId);
+      const status = body.status === "Suspended" ? "Suspended" : "Active";
+      if (!Number.isSafeInteger(memberId)) return json({ error: "Invalid owner" }, 400);
+      const owner = (await rest(`questdeck_members?select=id,email&id=eq.${memberId}&limit=1`))?.[0];
+      if (!owner) return json({ error: "Owner not found" }, 404);
+      if (String(owner.email).toLowerCase() === String(admin.email).toLowerCase() && status === "Suspended") return json({ error: "You cannot suspend your own owner account" }, 400);
+      await rest(`questdeck_owner_accounts?member_id=eq.${memberId}`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status, updated_at: new Date().toISOString() }),
+      });
+      return json({ ok: true, memberId, status });
+    }
+
     if (!context) return json({ error: "Workspace access required" }, 403);
 
     if (action === "load_admin") {
@@ -158,10 +302,10 @@ Deno.serve(async (request) => {
       const workspaceIds = context.memberships.map((item: any) => String(item.workspace_id));
       const projects = await rest(`questdeck_projects?select=id,name,card_count,color,owner,status,progress,updated_label&workspace_id=eq.${encodeURIComponent(context.workspaceId)}&order=created_at.asc`);
       const workspaces = await rest(`questdeck_workspaces?select=id,name,initials,member_count,status&id=in.(${workspaceIds.map((id: string) => `"${id.replaceAll('"', '')}"`).join(",")})&order=created_at.asc`);
-      const roles = await rest("questdeck_role_permissions?select=role,view_projects,edit_cards,manage_members,workspace_settings,billing_security&order=role.asc");
+      const roles = await rest(`questdeck_workspace_role_permissions?select=role,view_projects,edit_cards,manage_members,workspace_settings,billing_security&workspace_id=eq.${encodeURIComponent(context.workspaceId)}&order=role.asc`);
       const visibleMemberships = ownerOnly(context)
-        ? await rest("questdeck_workspace_memberships?select=workspace_id,member_id,role&order=created_at.asc")
-        : await rest(`questdeck_workspace_memberships?select=workspace_id,member_id,role&workspace_id=eq.${encodeURIComponent(context.workspaceId)}&order=created_at.asc`);
+        ? await rest(`questdeck_workspace_memberships?select=workspace_id,member_id,role,discipline&workspace_id=in.(${context.ownedWorkspaceIds.map((id: string) => `"${id.replaceAll('"', '')}"`).join(",")})&order=created_at.asc`)
+        : await rest(`questdeck_workspace_memberships?select=workspace_id,member_id,role,discipline&workspace_id=eq.${encodeURIComponent(context.workspaceId)}&order=created_at.asc`);
       const visibleMemberIds = Array.from(new Set((visibleMemberships ?? []).map((item: any) => Number(item.member_id)).filter(Number.isSafeInteger)));
       const rawMembers = visibleMemberIds.length
         ? await rest(`questdeck_members?select=id,name,email,initials,discipline,status&id=in.(${visibleMemberIds.join(",")})&order=created_at.asc`)
@@ -169,9 +313,9 @@ Deno.serve(async (request) => {
       const members = (rawMembers ?? []).map((member: any) => {
         const assigned = (visibleMemberships ?? []).filter((item: any) => Number(item.member_id) === Number(member.id));
         const current = assigned.find((item: any) => item.workspace_id === context.workspaceId);
-        return { ...member, role: current?.role ?? assigned[0]?.role ?? "Member", workspaceIds: assigned.map((item: any) => String(item.workspace_id)) };
+        return { ...member, role: current?.role ?? assigned[0]?.role ?? "Member", discipline: current?.discipline ?? assigned[0]?.discipline ?? member.discipline ?? "General", workspaceIds: assigned.map((item: any) => String(item.workspace_id)) };
       });
-      return json({ ok: true, projects, workspaces, roles, members, activeWorkspaceId: context.workspaceId, currentRole: context.role, isOwner: context.isOwner, currentMember: context.member, permissions: context.permissions });
+      return json({ ok: true, projects, workspaces, roles, members, activeWorkspaceId: context.workspaceId, currentRole: context.role, isOwner: context.isOwner, isPlatformAdmin: Boolean(admin), currentMember: context.member, permissions: context.permissions });
     }
 
     if (action === "load_feed") {
@@ -217,8 +361,13 @@ Deno.serve(async (request) => {
       });
       await rest("questdeck_workspace_memberships?on_conflict=workspace_id,member_id", {
         method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({ workspace_id: record.id, member_id: context.member.id, role: "Owner", updated_at: new Date().toISOString() }),
+        body: JSON.stringify({ workspace_id: record.id, member_id: context.member.id, role: "Owner", discipline: context.member.discipline || "General", updated_at: new Date().toISOString() }),
       });
+      await rest("questdeck_owner_accounts?on_conflict=member_id", {
+        method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({ member_id: context.member.id, status: "Active", updated_at: new Date().toISOString() }),
+      });
+      await seedWorkspacePermissions(record.id);
       context.workspaceId = record.id;
       const starterProject = cleanProject({
         id: `project-${record.id}`,
@@ -243,11 +392,12 @@ Deno.serve(async (request) => {
     if (action === "set_workspace_status") {
       if (!ownerOnly(context)) return json({ error: "Only owners can manage workspaces" }, 403);
       const workspaceId = String(body.workspaceId ?? "").trim();
+      if (!context.ownedWorkspaceIds.includes(workspaceId)) return json({ error: "You do not own this workspace" }, 403);
       const status = body.status === "Archived" ? "Archived" : "Active";
       const existing = (await rest(`questdeck_workspaces?select=id,status&id=eq.${encodeURIComponent(workspaceId)}&limit=1`))?.[0];
       if (!existing) return json({ error: "Workspace not found" }, 404);
       if (status === "Archived") {
-        const active = await rest("questdeck_workspaces?select=id&status=eq.Active");
+        const active = await rest(`questdeck_workspaces?select=id&status=eq.Active&id=in.(${context.ownedWorkspaceIds.map((id: string) => `"${id.replaceAll('"', '')}"`).join(",")})`);
         if ((active?.length ?? 0) <= 1 && existing.status === "Active") return json({ error: "Keep at least one active workspace" }, 400);
       }
       await rest(`questdeck_workspaces?id=eq.${encodeURIComponent(workspaceId)}`, {
@@ -260,7 +410,8 @@ Deno.serve(async (request) => {
     if (action === "delete_workspace") {
       if (!ownerOnly(context)) return json({ error: "Owner access required" }, 403);
       const workspaceId = String(body.workspaceId ?? "").trim();
-      const all = await rest("questdeck_workspaces?select=id");
+      if (!context.ownedWorkspaceIds.includes(workspaceId)) return json({ error: "You do not own this workspace" }, 403);
+      const all = await rest(`questdeck_workspaces?select=id&id=in.(${context.ownedWorkspaceIds.map((id: string) => `"${id.replaceAll('"', '')}"`).join(",")})`);
       if ((all?.length ?? 0) <= 1) return json({ error: "The final workspace cannot be deleted" }, 400);
       const existing = (all ?? []).find((item: any) => item.id === workspaceId);
       if (!existing) return json({ error: "Workspace not found" }, 404);
@@ -516,14 +667,17 @@ Deno.serve(async (request) => {
       const member = body.member ?? {};
       const email = String(member.email ?? "").trim().toLowerCase().slice(0, 320);
       const name = String(member.name ?? "").trim().slice(0, 120);
-      const role = ["Owner", "Admin", "Team Leader", "Member", "Guest"].includes(String(member.role)) ? String(member.role) : "Member";
+      const role = ["Admin", "Team Leader", "Member", "Guest"].includes(String(member.role)) ? String(member.role) : "Member";
       const status = ["Active", "Invited"].includes(String(member.status)) ? String(member.status) : "Invited";
       const requestedWorkspaceIds = Array.from(new Set((Array.isArray(member.workspaceIds) ? member.workspaceIds : [context.workspaceId]).map((id: unknown) => String(id).trim()).filter(Boolean)));
-      const allWorkspaces = await rest("questdeck_workspaces?select=id");
-      const validWorkspaceIds = requestedWorkspaceIds.filter(id => (allWorkspaces ?? []).some((workspace: any) => workspace.id === id));
+      const validWorkspaceIds = requestedWorkspaceIds.filter(id => context.ownedWorkspaceIds.includes(id));
       if (!validWorkspaceIds.length) return json({ error: "Choose at least one workspace" }, 400);
+      const memberByEmail = (await rest(`questdeck_members?select=id&email=ilike.${encodeURIComponent(email)}&limit=1`))?.[0] ?? null;
+      const resolvedMemberId = action === "add_member" && memberByEmail ? Number(memberByEmail.id) : Number(member.id);
+      const ownerAccount = memberByEmail ? (await rest(`questdeck_owner_accounts?select=member_id&member_id=eq.${memberByEmail.id}&limit=1`))?.[0] : null;
+      if (ownerAccount) return json({ error: "Owner accounts cannot be assigned through workspace member management" }, 400);
       const record = {
-        id: Number(member.id), name, email,
+        id: resolvedMemberId, name, email,
         initials: String(member.initials ?? "").trim().slice(0, 4),
         role: role === "Team Leader" ? "Member" : role,
         discipline: String(member.discipline ?? "General").trim().slice(0, 120), status,
@@ -531,28 +685,34 @@ Deno.serve(async (request) => {
       };
       if (!Number.isSafeInteger(record.id) || !record.name || !record.email || !record.initials) return json({ error: "Invalid member" }, 400);
       if (action === "add_member") {
-        await rest("questdeck_members?on_conflict=id", {
-          method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(record),
-        });
+        if (!memberByEmail) {
+          await rest("questdeck_members", {
+            method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(record),
+          });
+        }
       } else {
         const existing = (await rest(`questdeck_members?select=id,role,email&id=eq.${record.id}&limit=1`))?.[0];
         if (!existing) return json({ error: "Member not found" }, 404);
-        const existingMemberships = await rest(`questdeck_workspace_memberships?select=role&member_id=eq.${record.id}`);
-        if ((existingMemberships ?? []).some((membership: any) => membership.role === "Owner")) {
-          if (record.id !== context.member.id) return json({ error: "Owner access cannot be reassigned here" }, 400);
-          validWorkspaceIds.splice(0, validWorkspaceIds.length, ...(allWorkspaces ?? []).map((workspace: any) => String(workspace.id)));
-        }
+        const existingMemberships = await rest(`questdeck_workspace_memberships?select=workspace_id,role&member_id=eq.${record.id}`);
+        if ((existingMemberships ?? []).some((membership: any) => membership.role === "Owner")) return json({ error: "Owner accounts are managed in Owner administration" }, 400);
+        if (!(existingMemberships ?? []).some((membership: any) => context.ownedWorkspaceIds.includes(String(membership.workspace_id)))) return json({ error: "Member is outside your workspaces" }, 403);
         await rest(`questdeck_members?id=eq.${record.id}`, {
-          method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(record),
+          method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+            id: record.id, name: record.name, email: record.email, initials: record.initials,
+            role: record.role, status: record.status, updated_at: record.updated_at,
+          }),
         });
       }
-      await rest(`questdeck_workspace_memberships?member_id=eq.${record.id}`, { method: "DELETE" });
+      if (context.ownedWorkspaceIds.length) {
+        await rest(`questdeck_workspace_memberships?member_id=eq.${record.id}&workspace_id=in.(${context.ownedWorkspaceIds.map((id: string) => `"${id.replaceAll('"', '')}"`).join(",")})`, { method: "DELETE" });
+      }
       await rest("questdeck_workspace_memberships", {
         method: "POST", headers: { Prefer: "return=minimal" },
         body: JSON.stringify(validWorkspaceIds.map(workspaceId => ({
           workspace_id: workspaceId,
           member_id: record.id,
-          role: role === "Owner" ? "Owner" : role,
+          role,
+          discipline: record.discipline,
           updated_at: new Date().toISOString(),
         }))),
       });
@@ -565,9 +725,13 @@ Deno.serve(async (request) => {
       const memberId = Number(body.memberId);
       const existing = (await rest(`questdeck_members?select=id,auth_user_id&id=eq.${memberId}&limit=1`))?.[0];
       if (!existing) return json({ error: "Member not found" }, 404);
-      const existingMemberships = await rest(`questdeck_workspace_memberships?select=role&member_id=eq.${memberId}`);
+      const existingMemberships = await rest(`questdeck_workspace_memberships?select=workspace_id,role&member_id=eq.${memberId}`);
       if ((existingMemberships ?? []).some((membership: any) => membership.role === "Owner") || existing.auth_user_id === context.member.auth_user_id) return json({ error: "Owners and your own membership cannot be removed" }, 400);
-      await rest(`questdeck_members?id=eq.${memberId}`, { method: "DELETE" });
+      const shared = (existingMemberships ?? []).filter((membership: any) => context.ownedWorkspaceIds.includes(String(membership.workspace_id)));
+      if (!shared.length) return json({ error: "Member is outside your workspaces" }, 403);
+      await rest(`questdeck_workspace_memberships?member_id=eq.${memberId}&workspace_id=in.(${shared.map((item: any) => `"${String(item.workspace_id).replaceAll('"', '')}"`).join(",")})`, { method: "DELETE" });
+      const remaining = await rest(`questdeck_workspace_memberships?select=id&member_id=eq.${memberId}&limit=1`);
+      if (!(remaining?.length)) await rest(`questdeck_members?id=eq.${memberId}`, { method: "DELETE" });
       await recordActivity(context, { action: "removed member", target: `Member #${memberId}`, detail: "Workspace access removed", eventType: "Team", tone: "coral", destination: "roles" });
       return json({ ok: true });
     }
@@ -585,8 +749,8 @@ Deno.serve(async (request) => {
         billing_security: false,
         updated_at: new Date().toISOString(),
       };
-      await rest(`questdeck_role_permissions?role=eq.${encodeURIComponent(role)}`, {
-        method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(record),
+      await rest("questdeck_workspace_role_permissions?on_conflict=workspace_id,role", {
+        method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ workspace_id: context.workspaceId, role, ...record }),
       });
       return json({ ok: true, role, permissions: record });
     }
