@@ -213,10 +213,10 @@ function priorityTone(priority: number) {
   return "normal";
 }
 
-function QuestCard({ card, onOpen, compact = false, todoSummary, draggable = false, dragging = false, onDragStart, onDragEnd, onPreviewStart, onPreviewEnd }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number; isHero?: boolean; heroChildren?: number; heroCompleted?: number; parentHero?: boolean; parentHeroTitle?: string }; draggable?: boolean; dragging?: boolean; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void; onPreviewStart?: (card: Card, element: HTMLButtonElement, todoSummary?: { completed: number; total: number }) => void; onPreviewEnd?: () => void }) {
+function QuestCard({ card, onOpen, compact = false, todoSummary, heroExpanded = true, onToggleHero, draggable = false, dragging = false, onDragStart, onDragEnd, onPreviewStart, onPreviewEnd }: { card: Card; onOpen: (card: Card) => void; compact?: boolean; todoSummary?: { completed: number; total: number; isHero?: boolean; heroChildren?: number; heroCompleted?: number; parentHero?: boolean; parentHeroTitle?: string }; heroExpanded?: boolean; onToggleHero?: () => void; draggable?: boolean; dragging?: boolean; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void; onPreviewStart?: (card: Card, element: HTMLButtonElement, todoSummary?: { completed: number; total: number }) => void; onPreviewEnd?: () => void }) {
   return <button className={`quest-card priority-${priorityTone(card.priority)} ${compact ? "compact" : ""} ${todoSummary?.isHero ? "hero-parent-card" : ""} ${todoSummary?.parentHero ? "hero-sub-card" : ""} ${dragging ? "board-card-dragging" : ""}`} onClick={() => { onPreviewEnd?.(); onOpen(card); }} aria-label={`Open ${card.title}`} draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onMouseEnter={event => onPreviewStart?.(card, event.currentTarget, todoSummary)} onMouseLeave={onPreviewEnd} onFocus={event => onPreviewStart?.(card, event.currentTarget, todoSummary)} onBlur={onPreviewEnd}>
     <div className={`card-accent ${card.color}`}><span>{card.tag}</span><b className={`priority-badge ${priorityTone(card.priority)}`}>P{card.priority}</b><b>{card.points}</b></div>
-    <div className="card-body"><small>{card.project.toUpperCase()}</small><h4>{card.title}</h4>{!compact && <p>{card.description}</p>}{todoSummary?.isHero && <div className="hero-card-chip"><b>★ HERO</b><span>{todoSummary.heroCompleted}/{todoSummary.heroChildren} cards</span></div>}{todoSummary?.parentHero && <div className="hero-child-chip"><b>↳ SUB-CARD</b>{todoSummary.parentHeroTitle && <span>{todoSummary.parentHeroTitle}</span>}</div>}{todoSummary && todoSummary.total > 0 && <div className="card-subtask-progress" aria-label={`${todoSummary.completed} of ${todoSummary.total} sub-tasks complete`}><span><i style={{width:`${(todoSummary.completed / todoSummary.total) * 100}%`}} /></span><b>☑ {todoSummary.completed}/{todoSummary.total}</b></div>}<div className="card-footer"><span className="avatar">{card.owner}</span><span>◷ {card.due}</span><span>◌ {card.id % 4}</span></div></div>
+    <div className="card-body"><small>{card.project.toUpperCase()}</small><h4>{card.title}</h4>{!compact && <p>{card.description}</p>}{todoSummary?.isHero && <div className={`hero-card-chip ${onToggleHero ? "collapsible" : ""}`} aria-expanded={onToggleHero ? heroExpanded : undefined} onClick={event => { if (!onToggleHero) return; event.preventDefault(); event.stopPropagation(); onToggleHero(); }} title={onToggleHero ? (heroExpanded ? "Hide sub-cards" : "Show sub-cards") : undefined}><b>★ HERO</b><span>{todoSummary.heroCompleted}/{todoSummary.heroChildren} cards</span>{onToggleHero && <i className={heroExpanded ? "expanded" : ""}>⌄</i>}</div>}{todoSummary?.parentHero && <div className="hero-child-chip"><b>↳ SUB-CARD</b>{todoSummary.parentHeroTitle && <span>{todoSummary.parentHeroTitle}</span>}</div>}{todoSummary && todoSummary.total > 0 && <div className="card-subtask-progress" aria-label={`${todoSummary.completed} of ${todoSummary.total} sub-tasks complete`}><span><i style={{width:`${(todoSummary.completed / todoSummary.total) * 100}%`}} /></span><b>☑ {todoSummary.completed}/{todoSummary.total}</b></div>}<div className="card-footer"><span className="avatar">{card.owner}</span><span>◷ {card.due}</span><span>◌ {card.id % 4}</span></div></div>
   </button>;
 }
 
@@ -336,6 +336,7 @@ export default function Home() {
   const [cardHoverPreview, setCardHoverPreview] = useState<CardHoverPreview | null>(null);
   const cardHoverTimer = useRef<number | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [collapsedHeroIds, setCollapsedHeroIds] = useState<Set<number>>(() => new Set());
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [workspaceAccess, setWorkspaceAccess] = useState<"checking" | "allowed" | "denied">("checking");
@@ -1874,6 +1875,32 @@ export default function Home() {
     const parentHero = cards.find(item => heroChildIds(subTodos[item.id] ?? []).includes(card.id));
     return { completed: todos.filter(todo => todo.done).length, total: todos.length, isHero: hasHeroMarker(items), heroChildren: heroChildren.length, heroCompleted: heroChildren.filter(item => item.status === "Done").length, parentHero: Boolean(parentHero), parentHeroTitle: parentHero?.title };
   };
+  const toggleHeroTree = (heroId: number) => setCollapsedHeroIds(current => {
+    const next = new Set(current);
+    next.has(heroId) ? next.delete(heroId) : next.add(heroId);
+    return next;
+  });
+  const boardCardsForStatus = (status: Status) => {
+    const statusCards = filtered.filter(card => card.status === status);
+    const availableIds = new Set(statusCards.map(card => card.id));
+    const parentByChild = new Map<number, number>();
+    cards.forEach(parent => heroChildIds(subTodos[parent.id] ?? []).forEach(childId => parentByChild.set(childId, parent.id)));
+    const ordered: Card[] = [];
+    const added = new Set<number>();
+    statusCards.filter(card => !parentByChild.has(card.id)).forEach(card => {
+      ordered.push(card); added.add(card.id);
+      if (!collapsedHeroIds.has(card.id)) heroChildIds(subTodos[card.id] ?? []).forEach(childId => {
+        const child = statusCards.find(item => item.id === childId);
+        if (child && availableIds.has(child.id) && !added.has(child.id)) { ordered.push(child); added.add(child.id); }
+      });
+    });
+    statusCards.forEach(card => {
+      if (added.has(card.id)) return;
+      const parentId = parentByChild.get(card.id);
+      if (!parentId || !collapsedHeroIds.has(parentId)) ordered.push(card);
+    });
+    return ordered;
+  };
   const activeCardOwners = members.filter(member => member.status === "Active");
   const selectedOwner = selected ? members.find(member => member.initials === selected.owner) : null;
   const timelineDayCount = timelineScale === "2 weeks" ? 14 : timelineScale === "Month" ? 28 : 84;
@@ -2125,7 +2152,7 @@ export default function Home() {
           {(["Ready", "In progress", "Review", "Done"] as Status[]).map((status, index) => <section className={`board-column ${boardDropStatus === status ? "board-drop-target" : ""}`} key={status} onDragEnter={event => { event.preventDefault(); if (draggedBoardCard) { setBoardDropStatus(status); setBoardDropAction(null); } }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; if (draggedBoardCard) { setBoardDropStatus(status); setBoardDropAction(null); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBoardDropStatus(current => current === status ? null : current); }} onDrop={event => { event.preventDefault(); const cardId = Number(event.dataTransfer.getData("text/questdeck-board-card") || draggedBoardCard); if (cardId) void moveBoardCard(cardId, status); }}>
             <header><span className={`status-dot s${index}`}/><h3>{columnNames[status] || statusLabel(status)}</h3><b>{filtered.filter(c => c.status === status).length}</b><div className="column-menu-wrap"><button className={`column-menu-trigger ${activeColumnMenu === status ? "active" : ""}`} onClick={() => setActiveColumnMenu(current => current === status ? null : status)} aria-label={`${columnNames[status] || statusLabel(status)} ${tr("options", "옵션")}`} aria-expanded={activeColumnMenu === status}>•••</button>{activeColumnMenu === status && <div className="column-menu" role="menu"><button role="menuitem" onClick={() => openCreateCard(status)}>＋ <span>{tr("Add card here", "여기에 카드 추가")}</span></button><button role="menuitem" onClick={() => { setEditColumn(status); setActiveColumnMenu(null); }}>✎ <span>{tr("Rename column", "열 이름 변경")}</span></button>{columnNames[status] && <button role="menuitem" onClick={() => resetColumnName(status)}>↺ <span>{tr("Reset name", "기본 이름 복원")}</span></button>}</div>}</div></header>
             <form className="quick-card-form" onSubmit={event => quickAddCard(event, status)}><span>＋</span><input value={quickCardTitles[status] ?? ""} onChange={event => setQuickCardTitles(current => ({ ...current, [status]: event.target.value }))} placeholder={tr("Quick add a card…", "빠르게 카드 추가…")} aria-label={tr(`Quick add to ${statusLabel(status)}`, `${statusLabel(status)}에 빠른 카드 추가`)} maxLength={120}/><button type="submit" disabled={!quickCardTitles[status]?.trim()}>{tr("Add", "추가")}</button></form>
-            <div className="column-cards">{filtered.filter(c => c.status === status).map(card => <QuestCard card={card} onOpen={setSelected} compact={boardDensity === "compact"} draggable dragging={draggedBoardCard === card.id} onPreviewStart={scheduleCardHoverPreview} onPreviewEnd={hideCardHoverPreview} onDragStart={event => { hideCardHoverPreview(); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-board-card", String(card.id)); setDraggedBoardCard(card.id); setBoardDropStatus(status); setBoardDropAction(null); }} onDragEnd={() => { setDraggedBoardCard(null); setBoardDropStatus(null); setBoardDropAction(null); }} todoSummary={cardTodoSummary(card)} key={card.id}/>)}</div>
+            <div className="column-cards">{boardCardsForStatus(status).map(card => { const summary = cardTodoSummary(card); return <QuestCard card={card} onOpen={setSelected} compact={boardDensity === "compact"} heroExpanded={!collapsedHeroIds.has(card.id)} onToggleHero={summary.isHero && summary.heroChildren ? () => toggleHeroTree(card.id) : undefined} draggable dragging={draggedBoardCard === card.id} onPreviewStart={scheduleCardHoverPreview} onPreviewEnd={hideCardHoverPreview} onDragStart={event => { hideCardHoverPreview(); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/questdeck-board-card", String(card.id)); setDraggedBoardCard(card.id); setBoardDropStatus(status); setBoardDropAction(null); }} onDragEnd={() => { setDraggedBoardCard(null); setBoardDropStatus(null); setBoardDropAction(null); }} todoSummary={summary} key={card.id}/>; })}</div>
             {boardDropStatus === status && draggedBoardCard && <div className="board-drop-hint">{tr(`Drop in ${statusLabel(status)}`, `${statusLabel(status)}에 놓기`)}</div>}
           </section>)}
         </div>
