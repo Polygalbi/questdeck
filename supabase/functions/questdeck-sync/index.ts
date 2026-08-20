@@ -580,7 +580,7 @@ Deno.serve(async (request) => {
       const record = {
         view_projects: Boolean(permissions.view_projects),
         edit_cards: Boolean(permissions.edit_cards),
-        manage_members: Boolean(permissions.manage_members),
+        manage_members: false,
         workspace_settings: Boolean(permissions.workspace_settings),
         billing_security: false,
         updated_at: new Date().toISOString(),
