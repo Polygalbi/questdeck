@@ -433,6 +433,18 @@ Deno.serve(async (request) => {
       return json({ ok: true, cleared: pending?.length ?? 0 });
     }
 
+    if (action === "update_ui_font") {
+      const fontId = String(body.fontId ?? "");
+      const supportedFonts = ["classic", "pretendard", "chosun", "bookk-gothic", "freesentation", "nexon", "school-safety", "bookk-myungjo"];
+      if (!supportedFonts.includes(fontId)) return json({ error: "Unsupported screen font" }, 400);
+      await rest(`questdeck_members?id=eq.${context.member.id}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ ui_font: fontId, updated_at: new Date().toISOString() }),
+      });
+      return json({ ok: true, fontId });
+    }
+
     if (action === "load_admin") {
       if (!allowed(context, "view_projects")) return json({ error: "Permission denied" }, 403);
       const workspaceIds = context.memberships.map((item: any) => String(item.workspace_id));

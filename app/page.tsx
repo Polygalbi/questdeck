@@ -14,6 +14,7 @@ type View = "overview" | "quests" | "timeline" | "mindmap" | "flowchart" | "spre
 type Card = { id: number; title: string; description: string; tag: string; owner: string; collaborators?: string[]; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null; startDate?: string | null; archived?: boolean };
 type Account = { displayName: string; email: string; fullName: string | null };
 type RoleName = "Owner" | "Admin" | "Team Leader" | "Member" | "Guest";
+type UiFontId = "classic" | "pretendard" | "chosun" | "bookk-gothic" | "freesentation" | "nexon" | "school-safety" | "bookk-myungjo";
 type PermissionKey = "view_projects" | "edit_cards" | "manage_members" | "workspace_settings" | "billing_security";
 type RolePermissions = Record<PermissionKey, boolean>;
 type RoleDefinition = { name: RoleName; description: string; color: string; permissions: RolePermissions };
@@ -44,6 +45,21 @@ type MindmapGesture = { mode: "pan" | "node"; pointerId: number; startX: number;
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+const uiFonts: Array<{ id: UiFontId; name: string; nameKo: string; family: string }> = [
+  { id: "pretendard", name: "Pretendard", nameKo: "Pretendard", family: '"Pretendard Variable", Pretendard, sans-serif' },
+  { id: "chosun", name: "Chosun Shinmyeongjo", nameKo: "조선신명조", family: '"JoseonShinmyeongjo", serif' },
+  { id: "bookk-gothic", name: "Bookk Gothic", nameKo: "부크크 고딕", family: '"BookkGothic", sans-serif' },
+  { id: "freesentation", name: "Freesentation", nameKo: "프리젠테이션", family: '"Presentation", sans-serif' },
+  { id: "nexon", name: "Nexon Lv.2 Gothic", nameKo: "넥슨 Lv.2 고딕", family: '"NexonLv2Gothic", sans-serif' },
+  { id: "school-safety", name: "School Safety Notification", nameKo: "학교안심 알림장", family: '"SchoolSafetyNotification", sans-serif' },
+  { id: "bookk-myungjo", name: "Bookk Myungjo", nameKo: "부크크 명조", family: '"BookkMyungjo", serif' },
+  { id: "classic", name: "Questdeck Classic", nameKo: "Questdeck 클래식", family: "Arial, Helvetica, sans-serif" },
+];
+
+function isUiFontId(value: unknown): value is UiFontId {
+  return uiFonts.some(font => font.id === value);
+}
 
 type SupabaseCard = {
   id: number;
@@ -408,6 +424,7 @@ export default function Home() {
   const [activityFilter, setActivityFilter] = useState("All activity");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [language, setLanguage] = useState<"en" | "ko">("en");
+  const [uiFont, setUiFont] = useState<UiFontId>("pretendard");
   const [subTodos, setSubTodos] = useState<Record<number, SubTodo[]>>(initialSubTodos);
   const [editCardOpen, setEditCardOpen] = useState(false);
   const [timelineStart, setTimelineStart] = useState(() => addDays(timelineReferenceDate, -7));
@@ -552,6 +569,7 @@ export default function Home() {
       currentRole: RoleName;
       isOwner: boolean;
       isPlatformAdmin: boolean;
+      currentMember: { ui_font?: string };
     }>("load_admin", { workspaceId: activeWorkspaceId }, session.access_token).then(data => {
       if (data.activeWorkspaceId !== activeWorkspaceId) setActiveWorkspaceId(data.activeWorkspaceId);
       setProjects(data.projects.map(item => ({ id: item.id, name: item.name, count: item.card_count, color: item.color, owner: item.owner, status: item.status, progress: item.progress, updated: item.updated_label })));
@@ -566,6 +584,7 @@ export default function Home() {
       setCurrentRole(data.currentRole);
       setIsWorkspaceOwner(data.isOwner);
       setIsPlatformAdmin(data.isPlatformAdmin);
+      if (isUiFontId(data.currentMember?.ui_font)) setUiFont(data.currentMember.ui_font);
     }).catch(error => {
       setCurrentPermissions(null);
       setCurrentRole(null);
@@ -674,6 +693,7 @@ export default function Home() {
     const savedProjects = window.localStorage.getItem("questdeck-projects");
     const savedDisciplines = window.localStorage.getItem("questdeck-disciplines");
     const savedLanguage = window.localStorage.getItem("questdeck-language");
+    const savedUiFont = window.localStorage.getItem("questdeck-ui-font");
     const savedCards = window.localStorage.getItem("questdeck-cards");
     const savedSubTodos = window.localStorage.getItem("questdeck-sub-todos");
     if (savedCards) { try { const parsed = JSON.parse(savedCards); if (Array.isArray(parsed)) setCards(parsed); } catch {} }
@@ -684,6 +704,7 @@ export default function Home() {
     if (savedProjects) { try { setProjects(JSON.parse(savedProjects)); } catch {} }
     if (savedDisciplines) { try { const parsed = JSON.parse(savedDisciplines); if (Array.isArray(parsed) && parsed.length) setDisciplines(parsed); } catch {} }
     if (savedLanguage === "ko" || savedLanguage === "en") setLanguage(savedLanguage);
+    if (isUiFontId(savedUiFont)) setUiFont(savedUiFont);
   }, []);
   useEffect(() => { window.localStorage.setItem("questdeck-members", JSON.stringify(members)); }, [members]);
   useEffect(() => { window.localStorage.setItem("questdeck-workspaces", JSON.stringify({ workspaces, activeWorkspaceId })); }, [workspaces, activeWorkspaceId]);
@@ -697,6 +718,12 @@ export default function Home() {
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => { setMobileNavOpen(false); }, [view]);
   useEffect(() => { window.localStorage.setItem("questdeck-language", language); document.documentElement.lang = language; }, [language]);
+  useEffect(() => {
+    const font = uiFonts.find(item => item.id === uiFont) ?? uiFonts[0];
+    window.localStorage.setItem("questdeck-ui-font", font.id);
+    document.documentElement.dataset.questdeckFont = font.id;
+    document.documentElement.style.setProperty("--questdeck-ui-font", font.family);
+  }, [uiFont]);
   useEffect(() => { window.localStorage.setItem("questdeck-sub-todos", JSON.stringify(subTodos)); }, [subTodos]);
 
   const filtered = useMemo(() => {
@@ -2234,6 +2261,20 @@ export default function Home() {
     setToast(tr("Name updated everywhere", "이름이 모든 화면에 반영되었습니다"));
   }
 
+  async function chooseUiFont(fontId: UiFontId) {
+    setUiFont(fontId);
+    if (!session?.access_token || workspaceAccess !== "allowed") {
+      setToast(tr("Font saved on this device", "이 기기에 글꼴을 저장했습니다"));
+      return;
+    }
+    try {
+      await syncQuestdeck("update_ui_font", { fontId }, session.access_token);
+      setToast(tr("Screen font saved to your account", "화면 글꼴을 계정에 저장했습니다"));
+    } catch (cause) {
+      setToast(cause instanceof Error ? cause.message : tr("Could not save font", "글꼴을 저장하지 못했습니다"));
+    }
+  }
+
   const accountEmail = session?.user.email ?? account?.email ?? null;
   const sessionProfile = session?.user.user_metadata as Record<string, unknown> | undefined;
   const sessionName = [sessionProfile?.full_name, sessionProfile?.name, sessionProfile?.user_name, sessionProfile?.preferred_username].find(value => typeof value === "string" && value.trim()) as string | undefined;
@@ -2766,7 +2807,7 @@ export default function Home() {
 
       {view === "account" && <div className="content account-content">
         <div className="page-title"><div><p>{tr("PERSONAL SETTINGS", "개인 설정")}</p><h1>{tr("My account", "내 계정")}</h1><h2>{tr("Your identity, preferences, and active access.", "계정 정보, 환경설정, 접근 권한을 관리하세요.")}</h2></div><button className="secondary-button signout-link" onClick={() => session ? void supabase.auth.signOut() : setAuthOpen(true)}>{session ? tr("Sign out", "로그아웃") : tr("Sign in", "로그인")}</button></div>
-        <div className="account-grid"><section className="management-card account-hero"><div className="account-avatar">{accountInitials}</div><div><small>{session ? tr("SIGNED IN WITH SUPABASE", "SUPABASE로 로그인됨") : tr("SIGN IN TO EDIT", "수정하려면 로그인하세요")}</small><h2>{accountName}</h2><p>{accountEmail ?? tr("Secure workspace account", "안전한 워크스페이스 계정")}</p><span className="verified-badge">{session ? "✓ " + tr("Verified identity", "인증된 계정") : tr("Read-only access", "읽기 전용")}</span></div><button className="account-edit-name" onClick={() => session ? setNameEditorOpen(true) : setAuthOpen(true)}>✎ {tr("Edit name", "이름 수정")}</button></section><section className="management-card account-details"><small>{tr("ACCOUNT DETAILS", "계정 정보")}</small><div className="detail-line"><span>{tr("Email", "이메일")}</span><b>{accountEmail ?? tr("Not signed in", "로그인하지 않음")}</b></div><div className="detail-line"><span>{tr("Workspace role", "워크스페이스 역할")}</span><b>{currentMember?.role ?? "Owner"}</b></div><div className="detail-line discipline-detail"><span>{tr("Primary discipline", "주요 분야")}</span>{currentMember ? <select value={currentMember.discipline} onChange={event => void updateMemberDiscipline(currentMember, event.target.value)}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select> : <b>Production</b>}</div><div className="detail-line"><span>{tr("Access", "접근 권한")}</span><b>{session ? tr("All projects", "모든 프로젝트") : tr("View only", "보기 전용")}</b></div></section><section className="management-card account-preferences"><small>NOTIFICATIONS</small><label className="toggle-row"><span><b>Assigned card updates</b><small>Changes to cards you own</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Milestone reminders</b><small>Three days before deadlines</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Studio activity</b><small>Daily collaboration summary</small></span><input type="checkbox" /></label></section><section className="management-card sessions-card"><small>SECURITY</small><h3>{session ? tr("Active session", "활성 세션") : tr("No active session", "활성 세션 없음")}</h3><p>{session ? tr("Signed in through Supabase · Current browser", "Supabase로 로그인 · 현재 브라우저") : tr("Sign in to create and edit shared cards.", "공유 카드를 만들고 수정하려면 로그인하세요.")}</p><span className="healthy-pill">{session ? tr("Protected", "보호됨") : tr("Read only", "읽기 전용")}</span></section></div>
+        <div className="account-grid"><section className="management-card account-hero"><div className="account-avatar">{accountInitials}</div><div><small>{session ? tr("SIGNED IN WITH SUPABASE", "SUPABASE로 로그인됨") : tr("SIGN IN TO EDIT", "수정하려면 로그인하세요")}</small><h2>{accountName}</h2><p>{accountEmail ?? tr("Secure workspace account", "안전한 워크스페이스 계정")}</p><span className="verified-badge">{session ? "✓ " + tr("Verified identity", "인증된 계정") : tr("Read-only access", "읽기 전용")}</span></div><button className="account-edit-name" onClick={() => session ? setNameEditorOpen(true) : setAuthOpen(true)}>✎ {tr("Edit name", "이름 수정")}</button></section><section className="management-card account-details"><small>{tr("ACCOUNT DETAILS", "계정 정보")}</small><div className="detail-line"><span>{tr("Email", "이메일")}</span><b>{accountEmail ?? tr("Not signed in", "로그인하지 않음")}</b></div><div className="detail-line"><span>{tr("Workspace role", "워크스페이스 역할")}</span><b>{currentMember?.role ?? "Owner"}</b></div><div className="detail-line discipline-detail"><span>{tr("Primary discipline", "주요 분야")}</span>{currentMember ? <select value={currentMember.discipline} onChange={event => void updateMemberDiscipline(currentMember, event.target.value)}>{disciplines.map(discipline => <option key={discipline}>{discipline}</option>)}</select> : <b>Production</b>}</div><div className="detail-line"><span>{tr("Access", "접근 권한")}</span><b>{session ? tr("All projects", "모든 프로젝트") : tr("View only", "보기 전용")}</b></div></section><section className="management-card font-settings-card"><header><div><small>{tr("SCREEN FONT", "화면 글꼴")}</small><h3>{tr("Choose your reading style", "읽기 좋은 글꼴 선택")}</h3></div><span>{uiFonts.find(font => font.id === uiFont)?.[language === "ko" ? "nameKo" : "name"]}</span></header><div className="font-option-grid">{uiFonts.map(font => <button type="button" data-font={font.id} className={uiFont === font.id ? "selected" : ""} onClick={() => void chooseUiFont(font.id)} aria-pressed={uiFont === font.id} key={font.id}><b>{language === "ko" ? font.nameKo : font.name}</b><span>{tr("Plan today · Ship tomorrow 0123", "가나다라마바사 · 하루 계획 0123")}</span>{uiFont === font.id && <i>✓</i>}</button>)}</div><div className="font-live-preview"><small>{tr("CURRENT FONT PREVIEW", "현재 글꼴 미리보기")}</small><p>{tr("Organize today’s work one card at a time. 0123456789", "오늘의 할 일을 차근차근 정리해 보세요. 0123456789")}</p></div></section><section className="management-card account-preferences"><small>NOTIFICATIONS</small><label className="toggle-row"><span><b>Assigned card updates</b><small>Changes to cards you own</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Milestone reminders</b><small>Three days before deadlines</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Studio activity</b><small>Daily collaboration summary</small></span><input type="checkbox" /></label></section><section className="management-card sessions-card"><small>SECURITY</small><h3>{session ? tr("Active session", "활성 세션") : tr("No active session", "활성 세션 없음")}</h3><p>{session ? tr("Signed in through Supabase · Current browser", "Supabase로 로그인 · 현재 브라우저") : tr("Sign in to create and edit shared cards.", "공유 카드를 만들고 수정하려면 로그인하세요.")}</p><span className="healthy-pill">{session ? tr("Protected", "보호됨") : tr("Read only", "읽기 전용")}</span></section></div>
       </div>}
     </section>
     {createOpen && <div className="modal-backdrop" onMouseDown={() => setCreateOpen(false)}><section className="modal create-modal card-form-modal card-planner-modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Create a card"><header className="card-planner-header"><span className="card-planner-icon">＋</span><div><small>{tr("NEW QUEST", "새 퀘스트")}</small><h2>{tr("Create a production card", "프로덕션 카드 만들기")}</h2><p>{tr("Define the work, assign it, and set its place in the schedule.", "작업을 정의하고 담당자와 일정을 설정하세요.")}</p></div><button onClick={() => setCreateOpen(false)} aria-label="Close">×</button></header><form onSubmit={createCard}>

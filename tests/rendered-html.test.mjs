@@ -299,3 +299,22 @@ test("keeps first-time members in a three-day owner-managed waiting room", async
   assert.match(syncFunction, /context\.ownedWorkspaceIds\.includes\(targetWorkspaceId\)/);
   assert.match(syncFunction, /Only owners can clear the waiting list/);
 });
+
+test("offers persistent account-level Korean screen fonts", async () => {
+  const [page, css, migration, syncFunction] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202608210010_member_ui_font.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/questdeck-sync/index.ts", import.meta.url), "utf8"),
+  ]);
+  for (const font of ["pretendard", "chosun", "bookk-gothic", "freesentation", "nexon", "school-safety", "bookk-myungjo", "classic"]) {
+    assert.match(page, new RegExp(`id: "${font}"`));
+    assert.match(migration, new RegExp(`'${font}'`));
+  }
+  assert.match(page, /update_ui_font/);
+  assert.match(page, /questdeck-ui-font/);
+  assert.match(css, /Pretendard Variable/);
+  assert.match(css, /SchoolSafetyNotification/);
+  assert.match(syncFunction, /Unsupported screen font/);
+  assert.match(syncFunction, /ui_font: fontId/);
+});
