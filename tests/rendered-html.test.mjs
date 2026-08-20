@@ -191,9 +191,16 @@ test("includes private spreadsheets with formulas, CSV, and row-to-card actions"
   assert.match(spreadsheet, /addColumn/);
   assert.match(spreadsheet, /deleteSelectedRow/);
   assert.match(spreadsheet, /deleteSelectedColumn/);
+  assert.match(spreadsheet, /updateSelectedStyle/);
+  assert.match(spreadsheet, /setSelectedColumnWidth/);
+  assert.match(spreadsheet, /setSelectedRowHeight/);
+  assert.match(spreadsheet, /type="color"/);
+  assert.match(spreadsheet, /CellBorder/);
   assert.match(css, /\.spreadsheet-grid/);
   assert.match(css, /\.spreadsheet-formula/);
   assert.match(css, /\.spreadsheet-library/);
+  assert.match(css, /\.spreadsheet-formatbar/);
+  assert.match(css, /\.spreadsheet-size-group/);
 });
 
 test("scopes workspace access and includes the Team Leader role", async () => {
