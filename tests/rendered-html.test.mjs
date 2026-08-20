@@ -122,3 +122,22 @@ test("keeps milestone progress synchronized with active cards", async () => {
   assert.match(page, /Recalculate/);
   assert.match(css, /\.milestone-sync-status/);
 });
+
+test("includes a private, persistent infinite mindmap canvas", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /MINDMAP_DOCUMENT_PREFIX/);
+  assert.match(page, /serializeMindmap/);
+  assert.match(page, /saveMindmap/);
+  assert.match(page, /beginMindmapPan/);
+  assert.match(page, /beginMindmapNodeDrag/);
+  assert.match(page, /connectMindmapNode/);
+  assert.match(page, /fitMindmap/);
+  assert.match(page, /Infinite mindmap/);
+  assert.match(page, /Saved privately/);
+  assert.match(css, /\.mindmap-canvas/);
+  assert.match(css, /\.mindmap-node/);
+  assert.match(css, /\.mindmap-inspector/);
+});

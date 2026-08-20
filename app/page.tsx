@@ -1,10 +1,10 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ChangeEvent, DragEvent, FormEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 
 type Status = "Ready" | "In progress" | "Review" | "Done";
-type View = "overview" | "quests" | "timeline" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
+type View = "overview" | "quests" | "timeline" | "mindmap" | "documents" | "milestones" | "activity" | "management" | "projects-management" | "roles" | "account";
 type Card = { id: number; title: string; description: string; tag: string; owner: string; collaborators?: string[]; points: number; priority: number; color: string; status: Status; project: string; due: string; dueDate: string | null; startDate?: string | null; archived?: boolean };
 type Account = { displayName: string; email: string; fullName: string | null };
 type RoleName = "Owner" | "Admin" | "Member" | "Guest";
@@ -29,6 +29,11 @@ type WorkspaceBackup = { version: 2; product: "Questdeck"; kind: "full-workspace
 type CardHoverPreview = { card: Card; left: number; top: number; completed: number; total: number };
 type TimelineGesture = { cardId: number; mode: "move" | "start" | "end"; pointerId: number; startClientX: number; dayWidth: number; originStart: Date; originEnd: Date; currentStart: Date; currentEnd: Date };
 type TimelinePan = { pointerId: number; lastClientX: number; dayWidth: number };
+type MindmapNode = { id: string; title: string; note: string; x: number; y: number; color: "violet" | "mint" | "coral" | "blue" | "amber" };
+type MindmapEdge = { id: string; from: string; to: string };
+type MindmapData = { version: 1; nodes: MindmapNode[]; edges: MindmapEdge[] };
+type MindmapViewport = { x: number; y: number; zoom: number };
+type MindmapGesture = { mode: "pan" | "node"; pointerId: number; startX: number; startY: number; originX: number; originY: number; nodeId?: string };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -81,6 +86,16 @@ const documentImagePathPattern = /^[0-9a-f-]{36}\/\d+\/[a-zA-Z0-9._-]+$/i;
 const documentImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const HERO_MARKER = "__questdeck_hero__";
 const HERO_CHILD_PREFIX = "__questdeck_hero_child__:";
+const MINDMAP_DOCUMENT_PREFIX = "__questdeck_mindmap_v1__:";
+const initialMindmapNodes: MindmapNode[] = [
+  { id: "vision", title: "Game vision", note: "The experience we want players to remember", x: 0, y: 0, color: "violet" },
+  { id: "player", title: "Player experience", note: "Core emotions, choices, and feedback", x: -310, y: 190, color: "mint" },
+  { id: "world", title: "World & story", note: "Setting, characters, and narrative hooks", x: 310, y: 190, color: "coral" },
+];
+const initialMindmapEdges: MindmapEdge[] = [
+  { id: "vision-player", from: "vision", to: "player" },
+  { id: "vision-world", from: "vision", to: "world" },
+];
 const journeyTemplates: JourneyTemplate[] = [
   { id: "feature", name: "Feature journey", nameKo: "기능 제작 여정", steps: ["Define the experience", "Build the first pass", "Playtest and review", "Polish and ship"], stepsKo: ["경험 정의", "첫 버전 제작", "플레이테스트 및 검토", "다듬기 및 출시"] },
   { id: "asset", name: "Asset journey", nameKo: "에셋 제작 여정", steps: ["Create the brief", "Produce the asset", "Review in context", "Final polish"], stepsKo: ["브리프 작성", "에셋 제작", "게임 내 검토", "최종 다듬기"] },
@@ -173,7 +188,18 @@ const permissionRows: { key: PermissionKey; english: string; korean: string }[] 
 const initialActivityEvents: ActivityEvent[] = [];
 
 function isView(value: string): value is View {
-  return ["overview", "quests", "timeline", "documents", "milestones", "activity", "management", "projects-management", "roles", "account"].includes(value);
+  return ["overview", "quests", "timeline", "mindmap", "documents", "milestones", "activity", "management", "projects-management", "roles", "account"].includes(value);
+}
+
+function isMindmapDocument(document: WorkspaceDocument) { return document.content.startsWith(MINDMAP_DOCUMENT_PREFIX); }
+function serializeMindmap(nodes: MindmapNode[], edges: MindmapEdge[]) { return `${MINDMAP_DOCUMENT_PREFIX}${JSON.stringify({ version: 1, nodes, edges } satisfies MindmapData)}`; }
+function parseMindmap(content: string): MindmapData | null {
+  if (!content.startsWith(MINDMAP_DOCUMENT_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(content.slice(MINDMAP_DOCUMENT_PREFIX.length)) as Partial<MindmapData>;
+    if (parsed.version !== 1 || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
+    return { version: 1, nodes: parsed.nodes as MindmapNode[], edges: parsed.edges as MindmapEdge[] };
+  } catch { return null; }
 }
 
 function relativeTime(value: string) {
@@ -269,6 +295,18 @@ export default function Home() {
   const [editStartDate, setEditStartDate] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([]);
+  const [mindmapNodes, setMindmapNodes] = useState<MindmapNode[]>(initialMindmapNodes);
+  const [mindmapEdges, setMindmapEdges] = useState<MindmapEdge[]>(initialMindmapEdges);
+  const [mindmapViewport, setMindmapViewport] = useState<MindmapViewport>({ x: 430, y: 145, zoom: 1 });
+  const [selectedMindmapNodeId, setSelectedMindmapNodeId] = useState<string | null>("vision");
+  const [linkingMindmapNodeId, setLinkingMindmapNodeId] = useState<string | null>(null);
+  const [mindmapDirty, setMindmapDirty] = useState(false);
+  const [mindmapSaveState, setMindmapSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const mindmapCanvasRef = useRef<HTMLDivElement | null>(null);
+  const mindmapGestureRef = useRef<MindmapGesture | null>(null);
+  const mindmapDidMoveRef = useRef(false);
+  const mindmapRevisionRef = useRef(0);
+  const mindmapSaveRequestRef = useRef(0);
   const [documentEditorOpen, setDocumentEditorOpen] = useState(false);
   const [editingDocument, setEditingDocument] = useState<WorkspaceDocument | null>(null);
   const [documentDraftTitle, setDocumentDraftTitle] = useState("");
@@ -510,6 +548,31 @@ export default function Home() {
       .then(data => setDocuments(data.documents.map(item => ({ id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at }))))
       .catch(error => setToast(error instanceof Error ? error.message : tr("Could not load documents", "문서를 불러오지 못했습니다")));
   }, [session?.access_token, workspaceAccess]);
+  useEffect(() => {
+    if (mindmapDirty) return;
+    const stored = documents.find(isMindmapDocument);
+    const parsed = stored ? parseMindmap(stored.content) : null;
+    if (!parsed) return;
+    setMindmapNodes(parsed.nodes);
+    setMindmapEdges(parsed.edges);
+    setMindmapSaveState("saved");
+  }, [documents, mindmapDirty]);
+  useEffect(() => {
+    if (!mindmapDirty || !session?.access_token || workspaceAccess !== "allowed") return;
+    const timer = window.setTimeout(() => void saveMindmap(), 850);
+    return () => window.clearTimeout(timer);
+  }, [mindmapNodes, mindmapEdges, mindmapDirty, session?.access_token, workspaceAccess]);
+  useEffect(() => {
+    if (view !== "mindmap") return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable=true]")) return;
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedMindmapNodeId) { event.preventDefault(); deleteMindmapNode(selectedMindmapNodeId); }
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); addMindmapNode(); }
+      if ((event.ctrlKey || event.metaKey) && event.key === "0") { event.preventDefault(); fitMindmap(); }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [view, selectedMindmapNodeId, mindmapNodes]);
   useEffect(() => {
     if (!documentEditorOpen || !editingDocument || !documentDirty) return;
     const timer = window.setTimeout(() => void saveDocumentDraft(false), 1100);
@@ -1410,6 +1473,147 @@ export default function Home() {
     }
   }
 
+  function markMindmapDirty() {
+    mindmapRevisionRef.current += 1;
+    setMindmapDirty(true);
+    setMindmapSaveState("saving");
+  }
+
+  async function saveMindmap() {
+    const accessToken = requireSession();
+    if (!accessToken) return;
+    const revision = mindmapRevisionRef.current;
+    const request = ++mindmapSaveRequestRef.current;
+    const content = serializeMindmap(mindmapNodes, mindmapEdges);
+    const existing = documents.find(isMindmapDocument);
+    setMindmapSaveState("saving");
+    try {
+      const document = existing
+        ? { ...existing, title: "Workspace mindmap", content, isPublished: false }
+        : { title: "Workspace mindmap", content, createdByEmail: accountEmail ?? "", ownerName: accountName, isPublished: false };
+      const result = await syncQuestdeck<{ document: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string } }>(existing ? "update_document" : "create_document", { document }, accessToken);
+      if (mindmapSaveRequestRef.current !== request) return;
+      const saved = mapDocument(result.document);
+      setDocuments(current => existing ? current.map(item => item.id === saved.id ? saved : item) : [saved, ...current]);
+      if (mindmapRevisionRef.current === revision) {
+        setMindmapDirty(false);
+        setMindmapSaveState("saved");
+      } else setMindmapSaveState("saving");
+    } catch (error) {
+      if (mindmapSaveRequestRef.current === request) setMindmapSaveState("error");
+      setToast(error instanceof Error ? error.message : tr("Could not save mindmap", "마인드맵을 저장하지 못했습니다"));
+    }
+  }
+
+  function addMindmapNode(clientX?: number, clientY?: number) {
+    const canvas = mindmapCanvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    const screenX = clientX ?? (rect ? rect.left + rect.width / 2 : 500);
+    const screenY = clientY ?? (rect ? rect.top + rect.height / 2 : 400);
+    const id = `idea-${Date.now()}`;
+    const node: MindmapNode = {
+      id,
+      title: tr("New idea", "새 아이디어"),
+      note: tr("Add a short thought or question", "짧은 생각이나 질문을 추가하세요"),
+      x: (screenX - (rect?.left ?? 0) - mindmapViewport.x) / mindmapViewport.zoom - 110,
+      y: (screenY - (rect?.top ?? 0) - mindmapViewport.y) / mindmapViewport.zoom - 65,
+      color: "blue",
+    };
+    setMindmapNodes(current => [...current, node]);
+    setSelectedMindmapNodeId(id);
+    markMindmapDirty();
+  }
+
+  function deleteMindmapNode(nodeId: string) {
+    const node = mindmapNodes.find(item => item.id === nodeId);
+    if (!node || !window.confirm(tr(`Delete “${node.title}” from the mindmap?`, `마인드맵에서 “${node.title}”을(를) 삭제할까요?`))) return;
+    setMindmapNodes(current => current.filter(item => item.id !== nodeId));
+    setMindmapEdges(current => current.filter(edge => edge.from !== nodeId && edge.to !== nodeId));
+    setSelectedMindmapNodeId(current => current === nodeId ? null : current);
+    setLinkingMindmapNodeId(current => current === nodeId ? null : current);
+    markMindmapDirty();
+  }
+
+  function updateMindmapNode(nodeId: string, patch: Partial<MindmapNode>) {
+    setMindmapNodes(current => current.map(node => node.id === nodeId ? { ...node, ...patch } : node));
+    markMindmapDirty();
+  }
+
+  function connectMindmapNode(nodeId: string) {
+    if (!linkingMindmapNodeId) { setLinkingMindmapNodeId(nodeId); return; }
+    if (linkingMindmapNodeId === nodeId) { setLinkingMindmapNodeId(null); return; }
+    const duplicate = mindmapEdges.some(edge => edge.from === linkingMindmapNodeId && edge.to === nodeId || edge.from === nodeId && edge.to === linkingMindmapNodeId);
+    if (!duplicate) {
+      setMindmapEdges(current => [...current, { id: `edge-${Date.now()}`, from: linkingMindmapNodeId, to: nodeId }]);
+      markMindmapDirty();
+    }
+    setLinkingMindmapNodeId(null);
+  }
+
+  function beginMindmapPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".mindmap-node")) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    mindmapGestureRef.current = { mode: "pan", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: mindmapViewport.x, originY: mindmapViewport.y };
+    mindmapDidMoveRef.current = false;
+  }
+
+  function beginMindmapNodeDrag(event: ReactPointerEvent<HTMLElement>, node: MindmapNode) {
+    if (event.button !== 0 || Boolean(session) && !currentPermissions?.edit_cards || (event.target as HTMLElement).closest("button")) return;
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    mindmapGestureRef.current = { mode: "node", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: node.x, originY: node.y, nodeId: node.id };
+    mindmapDidMoveRef.current = false;
+    setSelectedMindmapNodeId(node.id);
+  }
+
+  function moveMindmapPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    const gesture = mindmapGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - gesture.startX;
+    const deltaY = event.clientY - gesture.startY;
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 3) mindmapDidMoveRef.current = true;
+    if (gesture.mode === "pan") setMindmapViewport(current => ({ ...current, x: gesture.originX + deltaX, y: gesture.originY + deltaY }));
+    else if (gesture.nodeId) setMindmapNodes(current => current.map(node => node.id === gesture.nodeId ? { ...node, x: gesture.originX + deltaX / mindmapViewport.zoom, y: gesture.originY + deltaY / mindmapViewport.zoom } : node));
+  }
+
+  function finishMindmapPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    const gesture = mindmapGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (gesture.mode === "node" && mindmapDidMoveRef.current) markMindmapDirty();
+    mindmapGestureRef.current = null;
+  }
+
+  function zoomMindmap(nextZoom: number, clientX?: number, clientY?: number) {
+    const canvas = mindmapCanvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    if (!rect) return;
+    const zoom = Math.min(2.2, Math.max(.35, nextZoom));
+    const anchorX = (clientX ?? rect.left + rect.width / 2) - rect.left;
+    const anchorY = (clientY ?? rect.top + rect.height / 2) - rect.top;
+    setMindmapViewport(current => {
+      const worldX = (anchorX - current.x) / current.zoom;
+      const worldY = (anchorY - current.y) / current.zoom;
+      return { x: anchorX - worldX * zoom, y: anchorY - worldY * zoom, zoom };
+    });
+  }
+
+  function handleMindmapWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    event.preventDefault();
+    zoomMindmap(mindmapViewport.zoom * (event.deltaY > 0 ? .9 : 1.1), event.clientX, event.clientY);
+  }
+
+  function fitMindmap() {
+    const canvas = mindmapCanvasRef.current;
+    if (!canvas || mindmapNodes.length === 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const minX = Math.min(...mindmapNodes.map(node => node.x));
+    const minY = Math.min(...mindmapNodes.map(node => node.y));
+    const maxX = Math.max(...mindmapNodes.map(node => node.x + 220));
+    const maxY = Math.max(...mindmapNodes.map(node => node.y + 130));
+    const zoom = Math.min(1.25, Math.max(.35, Math.min((rect.width - 100) / Math.max(220, maxX - minX), (rect.height - 100) / Math.max(130, maxY - minY))));
+    setMindmapViewport({ x: (rect.width - (minX + maxX) * zoom) / 2, y: (rect.height - (minY + maxY) * zoom) / 2, zoom });
+  }
+
   function mapDocument(item: { id: number; title: string; content: string; created_by_email: string; owner_name: string; is_published: boolean; share_slug: string; created_at: string; updated_at: string }): WorkspaceDocument {
     return { id: item.id, title: item.title, content: item.content, createdByEmail: item.created_by_email, ownerName: item.owner_name, isPublished: item.is_published, shareSlug: item.share_slug, createdAt: item.created_at, updatedAt: item.updated_at };
   }
@@ -1898,6 +2102,8 @@ export default function Home() {
   const overviewUpcomingCards = overviewActionCards.filter(card => card.dueDate && new Date(`${card.dueDate}T12:00:00`) >= overviewToday && new Date(`${card.dueDate}T12:00:00`) <= overviewWeekEnd).sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? "") || b.priority - a.priority).slice(0, 4);
   const overviewUrgentCards = overviewActionCards.filter(card => card.priority >= 8 || (card.dueDate && new Date(`${card.dueDate}T23:59:59`) < new Date())).sort((a, b) => Number(cardDueTone(a) !== "due-overdue") - Number(cardDueTone(b) !== "due-overdue") || b.priority - a.priority || (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999")).slice(0, 4);
   const recentPulseEvents = [...activityEvents].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 3);
+  const regularDocuments = documents.filter(document => !isMindmapDocument(document));
+  const selectedMindmapNode = mindmapNodes.find(node => node.id === selectedMindmapNodeId) ?? null;
   const sortedMilestones = milestones.map(item => ({ ...item, ...calculateMilestoneStats(item.milestoneDate) })).sort((a, b) => a.milestoneDate.localeCompare(b.milestoneDate));
   const milestoneDraftStats = calculateMilestoneStats(milestoneDraftDate);
   const milestoneToday = startOfDay(new Date());
@@ -2225,7 +2431,8 @@ export default function Home() {
         <button className={`nav-item ${view === "overview" ? "active" : ""}`} onClick={() => setView("overview")}><span>⌂</span> {tr("Overview", "개요")}</button>
         <button className={`nav-item ${view === "quests" ? "active" : ""}`} onClick={() => setView("quests")}><span>▤</span> {tr("Production board", "프로덕션 보드")} <i>{activeOpenCards.length}</i></button>
         <button className={`nav-item ${view === "timeline" ? "active" : ""}`} onClick={() => setView("timeline")}><span>↔</span> {tr("Timeline", "타임라인")}</button>
-        <button className={`nav-item ${view === "documents" ? "active" : ""}`} onClick={() => setView("documents")}><span>▧</span> {tr("Documents", "문서")} <i>{documents.length}</i></button>
+        <button className={`nav-item ${view === "mindmap" ? "active" : ""}`} onClick={() => setView("mindmap")}><span>⌘</span> {tr("Mindmap", "마인드맵")}</button>
+        <button className={`nav-item ${view === "documents" ? "active" : ""}`} onClick={() => setView("documents")}><span>▧</span> {tr("Documents", "문서")} <i>{regularDocuments.length}</i></button>
         <button className={`nav-item ${view === "milestones" ? "active" : ""}`} onClick={() => setView("milestones")}><span>◎</span> {tr("Milestones", "마일스톤")}</button>
         <p className="nav-label">{tr("MANAGE", "관리")}</p>
         <button className={`nav-item ${view === "management" ? "active" : ""}`} onClick={() => setView("management")}><span>⚙</span> {tr("Workspace", "워크스페이스")}</button>
@@ -2347,7 +2554,24 @@ export default function Home() {
         {timelineHover && (() => { const card = cards.find(item => item.id === timelineHover.cardId); if (!card) return null; const todos = visibleSubTodos(subTodos[card.id] ?? []); const completed = todos.filter(todo => todo.done).length; const start = card.startDate ? timelineDateLabel(new Date(`${card.startDate}T12:00:00`)) : card.due; const heroChildren = timelineHeroRelations.childrenByHero.get(card.id); const heroParent = timelineHeroRelations.parentByChild.get(card.id); const heroCompleted = heroChildren?.filter(child => child.status === "Done").length ?? 0; return <aside className="timeline-floating-tooltip" role="tooltip" style={{left:timelineHover.left,top:timelineHover.top}}>{heroChildren && <div className="timeline-tooltip-journey hero"><strong>★ {tr("Hero card", "Hero 카드")}</strong><strong>{heroCompleted}/{heroChildren.length} {tr("sub-cards done", "하위 카드 완료")}</strong></div>}{heroParent && <div className="timeline-tooltip-journey sub"><strong>↳ {tr("Sub-card", "하위 카드")} {heroParent.index + 1}/{heroParent.total}</strong><strong>{tr("Hero", "Hero")}: {heroParent.hero.title}</strong></div>}<b>{card.title}</b><p>{card.description}</p><div><strong>{card.project}</strong><strong>{statusLabel(card.status)}</strong></div><div><strong>◉ {card.owner}</strong><strong>↔ {start} → {card.due}</strong><strong>◆ {card.points}</strong></div>{todos.length > 0 && <footer><b>{tr("Sub-tasks", "하위 작업")} {completed}/{todos.length}</b><span>{todos.slice(0,2).map(todo => `${todo.done ? "✓" : "○"} ${todo.text}`).join(" · ")}</span></footer>}</aside> })()}
       </div>}
 
-      {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Create rich team documents with autosave, discussion, and shareable links.", "자동 저장, 토론, 공유 링크를 지원하는 팀 문서를 만드세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void createBlankDocument()}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{documents.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{richTextExcerpt(document.content).slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => openDocumentEditor(document)}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{documents.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
+      {view === "mindmap" && <div className="content mindmap-content">
+        <div className="page-title mindmap-title"><div><p>{tr("VISUAL THINKING", "비주얼 사고")}</p><h1>{tr("Infinite mindmap", "무한 마인드맵")}</h1><h2>{tr("Explore ideas freely, connect related thoughts, and keep the canvas with your workspace.", "아이디어를 자유롭게 펼치고 관련 생각을 연결하여 워크스페이스에 보관하세요.")}</h2></div><div className="mindmap-title-actions"><span className={`mindmap-save-state ${mindmapSaveState}`}><i />{mindmapSaveState === "saving" ? tr("Saving…", "저장 중…") : mindmapSaveState === "error" ? tr("Save failed", "저장 실패") : tr("Saved privately", "비공개 저장됨")}</span><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => addMindmapNode()}>＋ {tr("New idea", "새 아이디어")}</button></div></div>
+        <section className="mindmap-shell">
+          <header className="mindmap-toolbar"><div><button onClick={() => zoomMindmap(mindmapViewport.zoom * .85)} aria-label={tr("Zoom out", "축소")}>−</button><output>{Math.round(mindmapViewport.zoom * 100)}%</output><button onClick={() => zoomMindmap(mindmapViewport.zoom * 1.15)} aria-label={tr("Zoom in", "확대")}>＋</button><button className="mindmap-fit-button" onClick={fitMindmap}>⌗ {tr("Fit map", "전체 보기")}</button></div><p>{linkingMindmapNodeId ? tr("Choose another node’s link button to connect it", "연결할 다른 노드의 연결 버튼을 누르세요") : tr("Drag empty space to pan · Scroll to zoom · Double-click to add", "빈 공간 드래그: 이동 · 스크롤: 확대/축소 · 더블클릭: 추가")}</p><button className="mindmap-save-button" disabled={!mindmapDirty && mindmapSaveState !== "error"} onClick={() => void saveMindmap()}>✓ {tr("Save now", "지금 저장")}</button></header>
+          <div className="mindmap-workspace">
+            <div ref={mindmapCanvasRef} className={`mindmap-canvas ${mindmapGestureRef.current?.mode === "pan" ? "is-panning" : ""}`} onPointerDown={beginMindmapPan} onPointerMove={moveMindmapPointer} onPointerUp={finishMindmapPointer} onPointerCancel={finishMindmapPointer} onWheel={handleMindmapWheel} onClick={event => { if (!(event.target as HTMLElement).closest(".mindmap-node") && !mindmapDidMoveRef.current) setSelectedMindmapNodeId(null); }} onDoubleClick={event => { if (!(event.target as HTMLElement).closest(".mindmap-node")) addMindmapNode(event.clientX, event.clientY); }} aria-label={tr("Infinite mindmap canvas", "무한 마인드맵 캔버스")}>
+              <div className="mindmap-world" style={{transform:`translate(${mindmapViewport.x}px, ${mindmapViewport.y}px) scale(${mindmapViewport.zoom})`}}>
+                {mindmapEdges.map(edge => { const from = mindmapNodes.find(node => node.id === edge.from); const to = mindmapNodes.find(node => node.id === edge.to); if (!from || !to) return null; const x1 = from.x + 110; const y1 = from.y + 65; const x2 = to.x + 110; const y2 = to.y + 65; const distance = Math.hypot(x2 - x1, y2 - y1); const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; return <div className="mindmap-edge" style={{left:x1,top:y1,width:distance,transform:`rotate(${angle}deg)`}} key={edge.id}><i /></div>; })}
+                {mindmapNodes.map(node => <article className={`mindmap-node ${node.color} ${selectedMindmapNodeId === node.id ? "selected" : ""} ${linkingMindmapNodeId === node.id ? "linking" : ""}`} style={{left:node.x,top:node.y}} onPointerDown={event => beginMindmapNodeDrag(event, node)} onClick={() => { if (!mindmapDidMoveRef.current) setSelectedMindmapNodeId(node.id); }} tabIndex={0} key={node.id}><header><i /><span>{node.title.slice(0,1).toUpperCase()}</span><button onClick={event => { event.stopPropagation(); connectMindmapNode(node.id); }} disabled={Boolean(session) && !currentPermissions?.edit_cards} aria-label={linkingMindmapNodeId ? tr(`Connect to ${node.title}`, `${node.title}에 연결`) : tr(`Start a connection from ${node.title}`, `${node.title}에서 연결 시작`)}>{linkingMindmapNodeId === node.id ? "×" : "↗"}</button></header><h3>{node.title}</h3><p>{node.note}</p><footer><span>{mindmapEdges.filter(edge => edge.from === node.id || edge.to === node.id).length} {tr("links", "개 연결")}</span><b>⋮⋮</b></footer></article>)}
+              </div>
+              {mindmapNodes.length === 0 && <button className="mindmap-empty" onClick={() => addMindmapNode()}>＋ <b>{tr("Create your first idea", "첫 아이디어 만들기")}</b><span>{tr("Your canvas has room for anything.", "캔버스에는 무엇이든 펼칠 수 있습니다.")}</span></button>}
+            </div>
+            <aside className={`mindmap-inspector ${selectedMindmapNode ? "open" : ""}`}>{selectedMindmapNode ? <><header><div><small>{tr("SELECTED IDEA", "선택한 아이디어")}</small><b>{tr("Node details", "노드 상세")}</b></div><button onClick={() => setSelectedMindmapNodeId(null)}>×</button></header><label>{tr("Title", "제목")}<input value={selectedMindmapNode.title} maxLength={100} disabled={Boolean(session) && !currentPermissions?.edit_cards} onChange={event => updateMindmapNode(selectedMindmapNode.id, { title: event.target.value })} /></label><label>{tr("Thought or note", "생각 또는 메모")}<textarea value={selectedMindmapNode.note} maxLength={400} disabled={Boolean(session) && !currentPermissions?.edit_cards} onChange={event => updateMindmapNode(selectedMindmapNode.id, { note: event.target.value })} /></label><fieldset><legend>{tr("Color", "색상")}</legend>{(["violet","mint","coral","blue","amber"] as MindmapNode["color"][]).map(color => <button className={color === selectedMindmapNode.color ? "active" : ""} onClick={() => updateMindmapNode(selectedMindmapNode.id, { color })} aria-label={color} disabled={Boolean(session) && !currentPermissions?.edit_cards} key={color}><i className={color} /></button>)}</fieldset><div className="mindmap-inspector-actions"><button className={linkingMindmapNodeId === selectedMindmapNode.id ? "active" : ""} onClick={() => connectMindmapNode(selectedMindmapNode.id)}>↗ {linkingMindmapNodeId === selectedMindmapNode.id ? tr("Cancel connection", "연결 취소") : tr("Connect idea", "아이디어 연결")}</button><button className="danger-button" onClick={() => deleteMindmapNode(selectedMindmapNode.id)}>× {tr("Delete", "삭제")}</button></div><footer><small>{tr("Shortcuts", "단축키")}</small><span><kbd>⌘</kbd><kbd>↵</kbd> {tr("new idea", "새 아이디어")}</span><span><kbd>⌫</kbd> {tr("delete selected", "선택 삭제")}</span><span><kbd>⌘</kbd><kbd>0</kbd> {tr("fit map", "전체 보기")}</span></footer></> : <div className="mindmap-inspector-empty"><span>⌘</span><b>{tr("Select an idea", "아이디어 선택")}</b><p>{tr("Click a node to edit its title, note, color, or connections.", "노드를 선택하여 제목, 메모, 색상 또는 연결을 수정하세요.")}</p></div>}</aside>
+          </div>
+        </section>
+      </div>}
+
+      {view === "documents" && <div className="content documents-content"><div className="page-title"><div><p>{tr("KNOWLEDGE BASE", "지식 공유")}</p><h1>{tr("Documents", "문서")}</h1><h2>{tr("Create rich team documents with autosave, discussion, and shareable links.", "자동 저장, 토론, 공유 링크를 지원하는 팀 문서를 만드세요.")}</h2></div><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void createBlankDocument()}>＋ {tr("New document", "새 문서")}</button></div>{!session ? <section className="documents-signin"><span>▧</span><h3>{tr("Sign in to manage documents", "문서를 관리하려면 로그인하세요")}</h3><p>{tr("Published document links remain available to anyone you share them with.", "공개 문서 링크는 공유받은 누구나 열 수 있습니다.")}</p><button className="create-button" onClick={() => setAuthOpen(true)}>{tr("Sign in", "로그인")}</button></section> : <section className="document-grid">{regularDocuments.map(document => <article className="document-card" key={document.id}><header><span>▧</span><div><small>{document.isPublished ? tr("PUBLISHED", "공개") : tr("PRIVATE", "비공개")}</small><h3>{document.title}</h3></div><i className={document.isPublished ? "published" : ""}/></header><p>{richTextExcerpt(document.content).slice(0,180) || tr("Empty document", "빈 문서")}</p><small>{tr("Updated", "업데이트")} {new Date(document.updatedAt).toLocaleDateString(language === "ko" ? "ko-KR" : "en-US")} · {document.ownerName || document.createdByEmail}</small><footer><button onClick={() => openDocumentEditor(document)}>✎ {tr("Edit", "수정")}</button>{document.isPublished ? <><button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Copy link", "링크 복사")}</button><button onClick={() => void setDocumentPublished(document, false)}>◌ {tr("Unpublish", "비공개")}</button></> : <button onClick={() => void setDocumentPublished(document, true, true)}>↗ {tr("Publish & copy", "공개 및 복사")}</button>}<button className="document-delete" onClick={() => void deleteDocument(document)}>×</button></footer></article>)}{regularDocuments.length === 0 && <div className="documents-empty"><span>◇</span><h3>{tr("No documents yet", "아직 문서가 없습니다")}</h3><p>{tr("Create a production brief, meeting note, or team guide.", "프로덕션 브리프, 회의록 또는 팀 가이드를 만들어보세요.")}</p></div>}</section>}</div>}
 
       {view === "milestones" && <div className="content milestones-content">
         <div className="page-title"><div><p>{tr("ROADMAP", "로드맵")}</p><h1>{tr("Milestones", "마일스톤")}</h1><h2>{tr("Create delivery targets, track progress, and keep the whole studio aligned.", "출시 목표를 만들고 진행 상황을 추적하여 스튜디오 전체의 방향을 맞추세요.")}</h2></div><div className="milestone-page-actions"><span className={`milestone-sync-status ${milestoneSyncState}`} aria-live="polite"><i />{milestoneSyncState === "syncing" ? tr("Updating progress…", "진행률 업데이트 중…") : milestoneSyncState === "error" ? tr("Progress sync failed", "진행률 동기화 실패") : tr("Progress is live", "진행률 자동 업데이트")}</span><button className="secondary-button" disabled={milestoneSyncState === "syncing" || Boolean(session) && !currentPermissions?.edit_cards} onClick={() => void syncMilestoneProgress(true)}>↻ {tr("Recalculate", "다시 계산")}</button><button className="create-button" disabled={Boolean(session) && !currentPermissions?.edit_cards} onClick={() => openMilestoneEditor()}>＋ {tr("New milestone", "새 마일스톤")}</button></div></div>
