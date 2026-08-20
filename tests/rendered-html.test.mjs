@@ -32,6 +32,7 @@ test("includes the high-volume board and backup controls", async () => {
   assert.match(page, /collaborator_initials/);
   assert.match(page, /CoworkerPicker/);
   assert.match(page, /detail-coworkers/);
+  assert.match(page, /card-hover-coworkers/);
   assert.match(page, /selectedCollaborators/);
   assert.match(page, /card-title-row/);
   assert.match(page, /disciplineFilter/);
@@ -42,6 +43,7 @@ test("includes the high-volume board and backup controls", async () => {
   assert.match(css, /\.card-assignee-stack/);
   assert.match(css, /\.coworker-picker/);
   assert.match(css, /\.detail-coworkers/);
+  assert.match(css, /\.card-hover-coworkers/);
   assert.match(css, /\.column-cards\{[^}]*overflow-y:auto/);
 });
 
