@@ -151,6 +151,28 @@ test("includes a private, persistent infinite mindmap canvas", async () => {
   assert.match(css, /\.mindmap-node-tools/);
 });
 
+test("includes private multi-chart flowcharts with shapes and card creation", async () => {
+  const [page, flowchart, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/flowchart-studio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /view === "flowchart"/);
+  assert.match(page, /isFlowchartDocument/);
+  assert.match(flowchart, /__questdeck_flowchart_v1__/);
+  assert.match(flowchart, /Flowchart studio/);
+  assert.match(flowchart, /"start" \| "process" \| "decision" \| "data"/);
+  assert.match(flowchart, /createSignedUrls/);
+  assert.match(flowchart, /Image attached privately/);
+  assert.match(flowchart, /onCreateCard/);
+  assert.match(flowchart, /connectingFrom/);
+  assert.match(flowchart, /Path label/);
+  assert.match(css, /\.flowchart-canvas/);
+  assert.match(css, /\.flow-node\.decision/);
+  assert.match(css, /\.flow-edge/);
+  assert.match(css, /\.flowchart-library/);
+});
+
 test("scopes workspace access and includes the Team Leader role", async () => {
   const [page, accessCss, migration, syncFunction] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
