@@ -300,7 +300,7 @@ test("keeps first-time members in a three-day owner-managed waiting room", async
   assert.match(syncFunction, /Only owners can clear the waiting list/);
 });
 
-test("offers persistent account-level Korean screen fonts", async () => {
+test("offers persistent sidebar-accessible Korean screen fonts", async () => {
   const [page, css, migration, syncFunction] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -313,8 +313,14 @@ test("offers persistent account-level Korean screen fonts", async () => {
   }
   assert.match(page, /update_ui_font/);
   assert.match(page, /questdeck-ui-font/);
+  assert.match(page, /fontPickerOpen/);
+  assert.match(page, /sidebar-font-button/);
+  assert.match(page, /font-picker-modal/);
+  assert.match(page, /Help & shortcuts[\s\S]*Screen font/);
   assert.match(css, /Pretendard Variable/);
   assert.match(css, /SchoolSafetyNotification/);
+  assert.match(css, /\.sidebar-font-button/);
+  assert.match(css, /\.font-picker-modal/);
   assert.match(syncFunction, /Unsupported screen font/);
   assert.match(syncFunction, /ui_font: fontId/);
 });
