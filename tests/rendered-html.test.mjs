@@ -73,6 +73,8 @@ test("includes persistent Hero Cards, sub-cards, and Journey templates", async (
   assert.match(page, /linkExistingHeroChild/);
   assert.match(page, /createHeroChild/);
   assert.match(page, /startHeroJourney/);
+  assert.match(page, /function openCard\(card: Card\)/);
+  assert.match(page, /setHeroPanelOpen\(true\)/);
   assert.match(page, /hero-progress-card/);
   assert.match(page, /hero-sub-card/);
   assert.match(page, /SUB-CARD/);
