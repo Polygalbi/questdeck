@@ -28,6 +28,7 @@ type WorkspaceBackupAttachment = { path: string; mimeType: string; dataUrl: stri
 type WorkspaceBackup = { version: 2; product: "Questdeck"; kind: "full-workspace"; createdAt: string; workspace: { cards: Card[]; subTodos: Record<number, SubTodo[]>; projects: Project[]; milestones: Milestone[]; productionDisciplines: ProductionDiscipline[]; members: Member[]; roleDefinitions: RoleDefinition[]; workspaces: Workspace[]; activeWorkspaceId: string; settings: { studioName: string; weeklyDigest: boolean; defaultProjectId: string; language: "en" | "ko" }; documents: WorkspaceDocument[]; documentComments: DocumentComment[]; notifications: Notification[]; activityEvents: ActivityEvent[]; columnNames: Partial<Record<Status, string>> }; attachments: WorkspaceBackupAttachment[] };
 type CardHoverPreview = { card: Card; left: number; top: number; completed: number; total: number };
 type TimelineGesture = { cardId: number; mode: "move" | "start" | "end"; pointerId: number; startClientX: number; dayWidth: number; originStart: Date; originEnd: Date; currentStart: Date; currentEnd: Date };
+type TimelinePan = { pointerId: number; lastClientX: number; dayWidth: number };
 
 const SUPABASE_URL = "https://duddukvihvuoqawsoqus.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TcigjkGnxplktO6uSngk8w_UETJmWR6";
@@ -186,7 +187,6 @@ function relativeTime(value: string) {
 
 const initialSubTodos: Record<number, SubTodo[]> = {};
 
-const timelineReferenceDate = new Date(2026, 7, 18);
 const dayMs = 86_400_000;
 
 function addDays(date: Date, amount: number) {
@@ -198,6 +198,8 @@ function addDays(date: Date, amount: number) {
 function startOfDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
+
+const timelineReferenceDate = startOfDay(new Date());
 
 function cardDueDate(label: string) {
   if (label === "Today") return timelineReferenceDate;
@@ -338,7 +340,7 @@ export default function Home() {
   const [language, setLanguage] = useState<"en" | "ko">("en");
   const [subTodos, setSubTodos] = useState<Record<number, SubTodo[]>>(initialSubTodos);
   const [editCardOpen, setEditCardOpen] = useState(false);
-  const [timelineStart, setTimelineStart] = useState(() => new Date(2026, 7, 17));
+  const [timelineStart, setTimelineStart] = useState(() => addDays(timelineReferenceDate, -7));
   const [timelineScale, setTimelineScale] = useState<"2 weeks" | "Month" | "Quarter">("2 weeks");
   const [timelineSort, setTimelineSort] = useState<"Due date" | "Status" | "Owner" | "Name">("Due date");
   const [timelineRowHeight, setTimelineRowHeight] = useState(132);
@@ -347,6 +349,8 @@ export default function Home() {
   const [timelineGesture, setTimelineGesture] = useState<TimelineGesture | null>(null);
   const timelineGestureRef = useRef<TimelineGesture | null>(null);
   const timelineDidDrag = useRef(false);
+  const timelinePanRef = useRef<TimelinePan | null>(null);
+  const [timelinePanning, setTimelinePanning] = useState(false);
   const [draggedBoardCard, setDraggedBoardCard] = useState<number | null>(null);
   const [boardDropStatus, setBoardDropStatus] = useState<Status | null>(null);
   const [boardDropAction, setBoardDropAction] = useState<"archive" | "delete" | null>(null);
@@ -1971,6 +1975,36 @@ export default function Home() {
     setTimelineGesture(gesture);
   }
 
+  function beginTimelinePan(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".run-bar,button,input,select,a")) return;
+    const dateGrid = event.currentTarget.querySelector<HTMLElement>(".date-grid");
+    if (!dateGrid) return;
+    const dayWidth = Math.max(1, (dateGrid.scrollWidth - 210) / timelineDayCount);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    timelinePanRef.current = { pointerId: event.pointerId, lastClientX: event.clientX, dayWidth };
+    setTimelinePanning(true);
+    setTimelineHover(null);
+  }
+
+  function updateTimelinePan(event: React.PointerEvent<HTMLDivElement>) {
+    const pan = timelinePanRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const delta = event.clientX - pan.lastClientX;
+    const days = Math.trunc(delta / pan.dayWidth);
+    if (!days) return;
+    setTimelineStart(current => addDays(current, -days));
+    timelinePanRef.current = { ...pan, lastClientX: pan.lastClientX + days * pan.dayWidth };
+  }
+
+  function finishTimelinePan(event: React.PointerEvent<HTMLDivElement>) {
+    const pan = timelinePanRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    timelinePanRef.current = null;
+    setTimelinePanning(false);
+  }
+
   function beginTimelineGesture(event: React.PointerEvent<HTMLElement>, cardId: number, mode: TimelineGesture["mode"], startDate: Date, endDate: Date) {
     if (event.button !== 0) return;
     const track = event.currentTarget.closest(".lane-track");
@@ -2196,11 +2230,11 @@ export default function Home() {
       </div>}
 
       {view === "timeline" && <div className="content schedule-content">
-        <div className="page-title timeline-title"><div><p>{tr("PRODUCTION SCHEDULE", "프로덕션 일정")}</p><h1>{tr("Timeline", "타임라인")}</h1><h2>{tr("Plan the same cards shown on your Production Board.", "프로덕션 보드의 동일한 카드를 일정으로 계획하세요.")}</h2></div><div className="timeline-controls"><button onClick={() => setTimelineStart(current => addDays(current, -timelineDayCount))} aria-label={tr("Previous period", "이전 기간")}>‹</button><button className="today-button" onClick={() => setTimelineStart(new Date(2026, 7, 17))}>{tr("Today", "오늘")}</button><button onClick={() => setTimelineStart(current => addDays(current, timelineDayCount))} aria-label={tr("Next period", "다음 기간")}>›</button><select value={timelineScale} onChange={event => setTimelineScale(event.target.value as typeof timelineScale)} aria-label={tr("Timeline scale", "타임라인 범위")}><option value="2 weeks">{tr("2 weeks", "2주")}</option><option value="Month">{tr("Month", "월")}</option><option value="Quarter">{tr("Quarter", "분기")}</option></select></div></div>
+        <div className="page-title timeline-title"><div><p>{tr("PRODUCTION SCHEDULE", "프로덕션 일정")}</p><h1>{tr("Timeline", "타임라인")}</h1><h2>{tr("Plan the same cards shown on your Production Board.", "프로덕션 보드의 동일한 카드를 일정으로 계획하세요.")}</h2></div><div className="timeline-controls"><button onClick={() => setTimelineStart(current => addDays(current, -timelineDayCount))} aria-label={tr("Previous period", "이전 기간")}>‹</button><button className="today-button" onClick={() => setTimelineStart(addDays(timelineReferenceDate, -Math.floor(timelineDayCount / 2)))}>◎ {tr("Back to today", "오늘로 돌아가기")}</button><button onClick={() => setTimelineStart(current => addDays(current, timelineDayCount))} aria-label={tr("Next period", "다음 기간")}>›</button><select value={timelineScale} onChange={event => setTimelineScale(event.target.value as typeof timelineScale)} aria-label={tr("Timeline scale", "타임라인 범위")}><option value="2 weeks">{tr("2 weeks", "2주")}</option><option value="Month">{tr("Month", "월")}</option><option value="Quarter">{tr("Quarter", "분기")}</option></select></div></div>
         <div className="timeline-toolbar"><label>{tr("Project", "프로젝트")}<select value={project} onChange={event => setProject(event.target.value)}><option value="All projects">{tr("All projects", "모든 프로젝트")}</option>{activeProjects.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label><label>{tr("Sort", "정렬")}<select value={timelineSort} onChange={event => setTimelineSort(event.target.value as typeof timelineSort)}><option value="Due date">{tr("Due date", "마감일")}</option><option value="Status">{tr("Status", "상태")}</option><option value="Owner">{tr("Owner", "담당자")}</option><option value="Name">{tr("Name", "이름")}</option></select></label><label className="timeline-height-control">{tr("Row height", "행 높이")}<span><input type="range" min="88" max="220" step="4" value={timelineRowHeight} onChange={event => setTimelineRowHeight(Number(event.target.value))} aria-label={tr("Timeline row height", "타임라인 행 높이")} /><output>{timelineRowHeight}px</output></span></label><div className="timeline-status-summary" aria-label={tr("Timeline status totals", "타임라인 상태별 카드 수")}>{(["Ready", "In progress", "Review", "Done"] as Status[]).map(status => <span className={`status-${status.toLowerCase().replace(" ", "-")}`} key={status}><i />{statusLabel(status)} <b>{timelineCards.filter(item => item.card.status === status).length}</b></span>)}</div><span><b>{timelineCards.length}</b> {tr("scheduled cards", "개 일정 카드")}</span>{project !== "All projects" && <button onClick={() => setProject("All projects")}>× {tr("Clear project", "프로젝트 필터 해제")}</button>}</div>
         <section className="schedule-shell" style={{"--timeline-row-height":`${timelineRowHeight}px`} as CSSProperties}>
-          <header className="schedule-month"><div className="lane-corner"><span>{tr("BOARD CARDS", "보드 카드")}</span><b>{timelineMonthLabel}</b></div><div className="month-band"><span>{project === "All projects" ? tr("All active projects", "모든 활성 프로젝트") : project}</span><i>{tr("Drag cards to reschedule", "카드를 끌어 날짜 변경")}</i></div></header>
-          <div className="schedule-scroll">
+          <header className="schedule-month"><div className="lane-corner"><span>{tr("BOARD CARDS", "보드 카드")}</span><b>{timelineMonthLabel}</b></div><div className="month-band"><span>{project === "All projects" ? tr("All active projects", "모든 활성 프로젝트") : project}</span><i>{timelinePanning ? tr("Release to stop browsing", "놓으면 탐색을 멈춥니다") : tr("Drag empty space to browse dates", "빈 공간을 끌어 날짜 탐색")}</i></div></header>
+          <div className={`schedule-scroll timeline-pan-surface ${timelinePanning ? "is-panning" : ""}`} onPointerDown={beginTimelinePan} onPointerMove={updateTimelinePan} onPointerUp={finishTimelinePan} onPointerCancel={finishTimelinePan} aria-label={tr("Timeline table. Drag empty space left or right to browse dates.", "타임라인 표. 빈 공간을 좌우로 끌어 날짜를 탐색하세요.")}>
             <div className="date-grid" style={{gridTemplateColumns:`210px repeat(${timelineDayCount},minmax(58px,1fr))`}}><div className="date-label-spacer"/>{timelineDates.map(date => { const today = date.getTime() === timelineReferenceDate.getTime(); const weekend = date.getDay() === 0 || date.getDay() === 6; return <div className={`date-cell ${today ? "today" : ""} ${weekend ? "weekend" : ""}`} key={date.toISOString()}><small>{date.toLocaleDateString(language === "ko" ? "ko-KR" : "en-US", { weekday: "short" })}</small><b>{date.getDate()}</b></div>})}</div>
             <div className="schedule-body">
               {timelineReferenceDate >= timelineStart && timelineReferenceDate <= timelineEnd && <div className="today-line" style={{left:`calc(210px + ((100% - 210px) / ${timelineDayCount} * ${Math.floor((timelineReferenceDate.getTime() - timelineStart.getTime()) / dayMs) + .5}))`}} aria-hidden="true"><span>{tr("Today", "오늘")}</span></div>}

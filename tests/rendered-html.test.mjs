@@ -97,4 +97,8 @@ test("includes persistent Hero Cards, sub-cards, and Journey templates", async (
   assert.match(page, /timeline-hero-steps/);
   assert.match(css, /\.timeline-journey-badge/);
   assert.match(css, /\.timeline-tooltip-journey/);
+  assert.match(page, /beginTimelinePan/);
+  assert.match(page, /Back to today/);
+  assert.match(page, /Drag empty space to browse dates/);
+  assert.match(css, /\.timeline-pan-surface/);
 });
