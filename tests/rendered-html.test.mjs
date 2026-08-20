@@ -45,6 +45,13 @@ test("includes the high-volume board and backup controls", async () => {
   assert.match(css, /\.detail-coworkers/);
   assert.match(css, /\.card-hover-coworkers/);
   assert.match(css, /\.column-cards\{[^}]*overflow-y:auto/);
+  assert.match(page, /overviewUpcomingCards/);
+  assert.match(page, /overviewUrgentCards/);
+  assert.match(page, /recentPulseEvents/);
+  assert.match(page, /cardDueTone/);
+  assert.match(css, /\.overview-focus-grid/);
+  assert.match(css, /\.card-title-row>time\.due-overdue/);
+  assert.match(css, /\.live-pulse/);
 });
 
 test("includes working document editing and table controls", async () => {
