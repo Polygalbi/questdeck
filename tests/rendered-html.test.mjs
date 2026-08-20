@@ -321,6 +321,7 @@ test("offers persistent sidebar-accessible Korean screen fonts", async () => {
   assert.match(css, /SchoolSafetyNotification/);
   assert.match(css, /\.sidebar-font-button/);
   assert.match(css, /\.font-picker-modal/);
+  assert.match(css, /:not\(\.font-option-grid \*\)/);
   assert.match(syncFunction, /Unsupported screen font/);
   assert.match(syncFunction, /ui_font: fontId/);
 });
