@@ -134,6 +134,11 @@ test("includes a private, persistent infinite mindmap canvas", async () => {
   assert.match(page, /beginMindmapPan/);
   assert.match(page, /beginMindmapNodeDrag/);
   assert.match(page, /connectMindmapNode/);
+  assert.match(page, /disconnectMindmapEdge/);
+  assert.match(page, /selectedMindmapEdgeId/);
+  assert.match(page, /mindmap-edge-hit/);
+  assert.match(page, /mindmap-connections/);
+  assert.match(page, /Connect here/);
   assert.match(page, /fitMindmap/);
   assert.match(page, /createMindmap/);
   assert.match(page, /switchMindmap/);
@@ -149,6 +154,9 @@ test("includes a private, persistent infinite mindmap canvas", async () => {
   assert.match(css, /\.mindmap-inspector/);
   assert.match(css, /\.mindmap-library/);
   assert.match(css, /\.mindmap-node-tools/);
+  assert.match(css, /\.mindmap-edge-hit/);
+  assert.match(css, /\.mindmap-edge-remove/);
+  assert.match(css, /\.mindmap-connections/);
 });
 
 test("includes private multi-chart flowcharts with shapes and card creation", async () => {
